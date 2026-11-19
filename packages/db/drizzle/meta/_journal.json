@@ -15,6 +15,13 @@
       "when": 1795095347020,
       "tag": "0001_restricted_role",
       "breakpoints": false
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795096541805,
+      "tag": "0002_tidy_iron_patriot",
+      "breakpoints": true
     }
   ]
 }

@@ -17,22 +17,43 @@ import {
 } from '../src/index.js';
 import { InvalidTransitionError } from '@harness/core';
 
-const ADMIN_URL =
-  process.env.DATABASE_URL ||
+const ROOT_ADMIN_URL =
+  process.env.DATABASE_ADMIN_URL ||
   'postgres://harness:harness_password@127.0.0.1:5433/harness';
-const APP_URL =
-  process.env.APP_DATABASE_URL ||
-  'postgres://harness_app:harness_app_password@127.0.0.1:5433/harness';
+const TEST_DB_NAME = 'harness_test';
+const TEST_ADMIN_URL =
+  ROOT_ADMIN_URL.replace(/\/[^/]+$/, `/${TEST_DB_NAME}`);
+const TEST_APP_URL =
+  (process.env.DATABASE_URL || 'postgres://harness_app:harness_app_password@127.0.0.1:5433/harness')
+    .replace(/\/[^/]+$/, `/${TEST_DB_NAME}`);
 
 describe('Database and Repository Integration Tests', { timeout: 30000 }, () => {
   let db: Database;
   let adminClient: postgres.Sql;
 
   beforeAll(async () => {
-    // Run migrations to ensure schema and restricted role exist
-    await runMigrations(ADMIN_URL);
-    adminClient = postgres(ADMIN_URL, { max: 1 });
-    db = createDb(ADMIN_URL);
+    // 1. Create separate test database 'harness_test' using root admin connection
+    const rootClient = postgres(ROOT_ADMIN_URL, { max: 1 });
+    const exists = await rootClient`SELECT 1 FROM pg_database WHERE datname = ${TEST_DB_NAME}`;
+    if (exists.length > 0) {
+      await rootClient.unsafe(`
+        SELECT pg_terminate_backend(pid)
+        FROM pg_stat_activity
+        WHERE datname = '${TEST_DB_NAME}' AND pid <> pg_backend_pid()
+      `);
+      await rootClient.unsafe(`DROP DATABASE ${TEST_DB_NAME}`);
+    }
+    await rootClient.unsafe(`CREATE DATABASE ${TEST_DB_NAME}`);
+    await rootClient.end();
+
+    // 2. Run migrations on the separate harness_test database with admin role
+    await runMigrations(TEST_ADMIN_URL);
+
+    // 3. Admin client for fixture setup and checking
+    adminClient = postgres(TEST_ADMIN_URL, { max: 1 });
+
+    // 4. Runtime / repository code MUST use harness_app restricted role
+    db = createDb(TEST_APP_URL);
   });
 
   afterAll(async () => {
@@ -190,17 +211,67 @@ describe('Database and Repository Integration Tests', { timeout: 30000 }, () => 
       expect(fetched?.steps[0].idx).toBe(0);
       expect(fetched?.steps[1].idx).toBe(1);
     });
+
+    it('handles paused state, verifying->running, retry failed->queued, and rejects awaiting_approval->running', async () => {
+      const repoId = `repo-state-${Date.now()}`;
+      await createRepo(db, {
+        id: repoId,
+        name: 'state-machine-repo',
+        localPath: '/tmp/test',
+      });
+
+      const taskId = `task-sm-${Date.now()}`;
+      await createTask(db, {
+        id: taskId,
+        repoId,
+        title: 'State Machine Test',
+        description: 'Verify new state transitions in DB',
+        status: 'queued',
+      });
+
+      // queued -> running
+      await transitionTask(db, taskId, 'queued', 'running', 'agent');
+
+      // running <-> paused (mid-run tool approvals)
+      const pausedTask = await transitionTask(db, taskId, 'running', 'paused', 'agent');
+      expect(pausedTask.status).toBe('paused');
+
+      const resumedTask = await transitionTask(db, taskId, 'paused', 'running', 'human');
+      expect(resumedTask.status).toBe('running');
+
+      // running -> verifying
+      await transitionTask(db, taskId, 'running', 'verifying', 'agent');
+
+      // verifying -> running (agent fixes failed verification)
+      const fixingTask = await transitionTask(db, taskId, 'verifying', 'running', 'agent');
+      expect(fixingTask.status).toBe('running');
+
+      // running -> verifying -> awaiting_approval
+      await transitionTask(db, taskId, 'running', 'verifying', 'agent');
+      await transitionTask(db, taskId, 'verifying', 'awaiting_approval', 'agent');
+
+      // awaiting_approval -> running is NOT allowed
+      await expect(
+        transitionTask(db, taskId, 'awaiting_approval', 'running', 'agent')
+      ).rejects.toThrow(InvalidTransitionError);
+
+      // awaiting_approval -> failed -> queued (retry attempt)
+      await transitionTask(db, taskId, 'awaiting_approval', 'failed', 'system');
+      const retriedTask = await transitionTask(db, taskId, 'failed', 'queued', 'system');
+      expect(retriedTask.status).toBe('queued');
+    });
   });
 
   describe('Security: Append-Only Audit Log under harness_app Role', () => {
     let appClient: postgres.Sql;
 
     beforeAll(() => {
-      appClient = postgres(APP_URL, { max: 1 });
+      // Connects AS harness_app via its own login (not SET ROLE from a superuser)
+      appClient = postgres(TEST_APP_URL, { max: 1 });
     });
 
     afterAll(async () => {
-      await appClient.end();
+      await appClient?.end();
     });
 
     it('harness_app can INSERT and SELECT on audit_log', async () => {
@@ -251,6 +322,26 @@ describe('Database and Repository Integration Tests', { timeout: 30000 }, () => 
       await expect(
         appClient`
           DELETE FROM audit_log WHERE id = ${row.id};
+        `
+      ).rejects.toThrow(/permission denied/i);
+    });
+
+    it('harness_app CANNOT DELETE from operational tables (e.g. tasks)', async () => {
+      // harness_app has SELECT, INSERT, UPDATE only (no DELETE)
+      const [repo] = await adminClient`
+        INSERT INTO repos (id, name, local_path)
+        VALUES ('repo-del-test', 'test-del', '/tmp')
+        RETURNING id;
+      `;
+      const [task] = await adminClient`
+        INSERT INTO tasks (id, repo_id, title, description, status)
+        VALUES ('task-del-test', ${repo.id}, 'title', 'desc', 'queued')
+        RETURNING id;
+      `;
+
+      await expect(
+        appClient`
+          DELETE FROM tasks WHERE id = ${task.id};
         `
       ).rejects.toThrow(/permission denied/i);
     });

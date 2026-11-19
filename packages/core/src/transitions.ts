@@ -2,7 +2,6 @@ import { TaskStatus, TaskStatusSchema } from './types.js';
 
 export const TERMINAL_STATUSES: readonly TaskStatus[] = [
   'done',
-  'failed',
   'cancelled',
 ] as const;
 
@@ -11,18 +10,23 @@ export const ALL_STATUSES: readonly TaskStatus[] = TaskStatusSchema.options;
 /**
  * State machine allowed transitions:
  * queued -> running -> verifying -> awaiting_approval -> pushing -> done.
- * Extra: running -> needs_info -> running; any non-terminal -> failed | cancelled.
- * Terminal: done, failed, cancelled (no outgoing transitions).
+ * Mid-run tool approvals: running <-> paused.
+ * Extra: running -> needs_info -> running.
+ * Agent fixes failed verification: verifying -> running.
+ * Retry on failure: failed -> queued.
+ * Any non-terminal -> failed | cancelled.
+ * Terminal: done, cancelled (no outgoing transitions).
  */
 export const ALLOWED_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   queued: ['running', 'failed', 'cancelled'],
-  running: ['verifying', 'needs_info', 'failed', 'cancelled'],
+  running: ['verifying', 'paused', 'needs_info', 'failed', 'cancelled'],
+  paused: ['running', 'failed', 'cancelled'],
   needs_info: ['running', 'failed', 'cancelled'],
-  verifying: ['awaiting_approval', 'failed', 'cancelled'],
+  verifying: ['awaiting_approval', 'running', 'failed', 'cancelled'],
   awaiting_approval: ['pushing', 'failed', 'cancelled'],
   pushing: ['done', 'failed', 'cancelled'],
   done: [],
-  failed: [],
+  failed: ['queued'],
   cancelled: [],
 };
 

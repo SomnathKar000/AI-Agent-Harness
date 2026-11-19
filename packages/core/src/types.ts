@@ -3,11 +3,12 @@ import { z } from 'zod';
 export const TaskStatusSchema = z.enum([
   'queued',
   'running',
+  'paused',
+  'needs_info',
   'verifying',
   'awaiting_approval',
   'pushing',
   'done',
-  'needs_info',
   'failed',
   'cancelled',
 ]);

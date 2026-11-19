@@ -8,7 +8,7 @@ export function createDb(connectionString?: string): Database {
   const url =
     connectionString ||
     process.env.DATABASE_URL ||
-    'postgres://harness:harness_password@127.0.0.1:5433/harness';
+    'postgres://harness_app:harness_app_password@127.0.0.1:5433/harness';
 
   const client = postgres(url, { max: 10 });
   return drizzle(client, { schema });

@@ -6,6 +6,8 @@
   "types": "./src/index.ts",
   "scripts": {
     "build": "tsc",
+    "migrate": "tsc && node dist/migrate.js",
+    "generate": "drizzle-kit generate",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "lint": "eslint ."

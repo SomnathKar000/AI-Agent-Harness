@@ -21,12 +21,27 @@ describe('Task State Machine (packages/core)', () => {
     expect(canTransition('awaiting_approval', 'pushing')).toBe(true);
     expect(canTransition('pushing', 'done')).toBe(true);
 
+    // Mid-run tool approvals: running <-> paused
+    expect(canTransition('running', 'paused')).toBe(true);
+    expect(canTransition('paused', 'running')).toBe(true);
+
+    // awaiting_approval -> running is NOT allowed (final diff review only)
+    expect(canTransition('awaiting_approval', 'running')).toBe(false);
+
+    // Agent fixes failed verification: verifying -> running
+    expect(canTransition('verifying', 'running')).toBe(true);
+
+    // Retry on failure: failed -> queued
+    expect(canTransition('failed', 'queued')).toBe(true);
+
     // Extra: running -> needs_info -> running
     expect(canTransition('running', 'needs_info')).toBe(true);
     expect(canTransition('needs_info', 'running')).toBe(true);
 
     // Any non-terminal can transition to failed or cancelled
-    const nonTerminals = ALL_STATUSES.filter((s) => !TERMINAL_STATUSES.includes(s as any));
+    const nonTerminals = ALL_STATUSES.filter(
+      (s) => !TERMINAL_STATUSES.includes(s as any) && s !== 'failed'
+    );
     for (const status of nonTerminals) {
       expect(canTransition(status, 'failed')).toBe(true);
       expect(canTransition(status, 'cancelled')).toBe(true);

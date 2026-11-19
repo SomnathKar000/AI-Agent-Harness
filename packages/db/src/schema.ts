@@ -7,7 +7,21 @@ import {
   timestamp,
   jsonb,
   bigserial,
+  pgEnum,
 } from 'drizzle-orm/pg-core';
+
+export const taskStatusEnum = pgEnum('task_status', [
+  'queued',
+  'running',
+  'paused',
+  'needs_info',
+  'verifying',
+  'awaiting_approval',
+  'pushing',
+  'done',
+  'failed',
+  'cancelled',
+]);
 
 export const repos = pgTable('repos', {
   id: text('id').primaryKey(),
@@ -32,7 +46,7 @@ export const tasks = pgTable('tasks', {
   type: text('type').default('bugfix').notNull(),
   title: text('title').notNull(),
   description: text('description').notNull(),
-  status: text('status').default('queued').notNull(),
+  status: taskStatusEnum('status').default('queued').notNull(),
   branchName: text('branch_name'),
   worktreePath: text('worktree_path'),
   containerId: text('container_id'),
