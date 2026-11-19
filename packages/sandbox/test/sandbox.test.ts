@@ -259,5 +259,37 @@ describe('Sandbox Security and Lifecycle Integration Tests', { timeout: 60000 },
       expect(diff).toContain('items.slice(startIndex, endIndex)');
       expect(diff).toContain('[]');
     });
+
+    it('container has no capabilities (CapDrop ALL and no-new-privileges)', async () => {
+      const taskId = `test-cap-${Date.now()}`;
+      const ws = await createWorkspace(BUGGY_REPO_PATH, taskId, 'main');
+      createdWorkspaces.push(ws);
+
+      const containerId = await startContainer(ws);
+      createdContainers.push(containerId);
+
+      const inspect = await docker.getContainer(containerId).inspect();
+      expect(inspect.HostConfig.CapDrop).toEqual(['ALL']);
+      expect(inspect.HostConfig.SecurityOpt).toContain('no-new-privileges');
+    });
+
+    it('malicious .git or hook does not execute or get followed during getDiff()', async () => {
+      const taskId = `test-tampergit-${Date.now()}`;
+      const ws = await createWorkspace(BUGGY_REPO_PATH, taskId, 'main');
+      createdWorkspaces.push(ws);
+
+      // Modify a file in the worktree
+      const fileToChange = path.join(ws.worktreePath, 'src/paginate.ts');
+      const original = fs.readFileSync(fileToChange, 'utf8');
+      fs.writeFileSync(fileToChange, original.replace('items.slice(startIndex, endIndex)', '[]'), 'utf8');
+
+      // Overwrite .git inside worktree pointing to a malicious/fake path
+      fs.writeFileSync(path.join(ws.worktreePath, '.git'), 'gitdir: /tmp/nonexistent-evil-git\n');
+
+      // getDiff must succeed using explicit --git-dir and --work-tree, ignoring the tampered .git
+      const diff = await getDiff(ws);
+      expect(diff).toContain('items.slice(startIndex, endIndex)');
+      expect(diff).toContain('[]');
+    });
   });
 });

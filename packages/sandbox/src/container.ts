@@ -11,6 +11,8 @@ export async function startContainer(
   const hostConfig: Docker.HostConfig = {
     NetworkMode: 'none',
     ReadonlyRootfs: true,
+    CapDrop: ['ALL'],
+    SecurityOpt: ['no-new-privileges'],
     Tmpfs: {
       '/tmp': 'rw,size=64m',
     },
@@ -54,6 +56,8 @@ export async function installDependencies(
     Cmd: cmd,
     HostConfig: {
       NetworkMode: 'bridge',
+      CapDrop: ['ALL'],
+      SecurityOpt: ['no-new-privileges'],
       Binds: [`${workspace.worktreePath}:/workspace:rw`],
       Tmpfs: {
         '/tmp': 'rw,size=64m',

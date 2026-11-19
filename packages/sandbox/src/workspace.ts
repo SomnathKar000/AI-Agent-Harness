@@ -4,6 +4,40 @@ import os from 'node:os';
 import { execa } from 'execa';
 import type { Workspace } from './types.js';
 
+function getWorktreeGitDir(workspace: Workspace): string {
+  const mainGit = path.join(workspace.repoPath, '.git');
+  if (fs.existsSync(mainGit) && fs.statSync(mainGit).isDirectory()) {
+    return path.join(mainGit, 'worktrees', workspace.taskId);
+  }
+  if (fs.existsSync(mainGit) && fs.statSync(mainGit).isFile()) {
+    const content = fs.readFileSync(mainGit, 'utf8');
+    const match = content.match(/gitdir:\s*(.+)/);
+    if (match) {
+      const gitDir = path.resolve(workspace.repoPath, match[1].trim());
+      return path.join(gitDir, 'worktrees', workspace.taskId);
+    }
+  }
+  return path.join(workspace.repoPath, '.git', 'worktrees', workspace.taskId);
+}
+
+export function getHardenedGitArgs(
+  workspace: Workspace,
+  subCommandArgs: string[]
+): string[] {
+  const worktreeGitDir = getWorktreeGitDir(workspace);
+  return [
+    `--git-dir=${worktreeGitDir}`,
+    `--work-tree=${workspace.worktreePath}`,
+    '-c',
+    'core.hooksPath=/dev/null',
+    '-c',
+    'core.fsmonitor=false',
+    '-c',
+    'core.sshCommand=/bin/false',
+    ...subCommandArgs,
+  ];
+}
+
 export async function createWorkspace(
   repoPath: string,
   taskId: string,
@@ -57,16 +91,20 @@ export async function createWorkspace(
 export async function getDiff(workspace: Workspace): Promise<string> {
   // Track intent to add for any untracked files so they show in diff
   try {
-    await execa('git', ['add', '-N', '.'], {
-      cwd: workspace.worktreePath,
+    await execa('git', getHardenedGitArgs(workspace, ['add', '-N', '.']), {
+      cwd: workspace.repoPath,
     });
   } catch {
     // Ignore if git add -N fails (e.g. no changes)
   }
 
-  const { stdout } = await execa('git', ['diff', workspace.baseBranch], {
-    cwd: workspace.worktreePath,
-  });
+  const { stdout } = await execa(
+    'git',
+    getHardenedGitArgs(workspace, ['diff', workspace.baseBranch]),
+    {
+      cwd: workspace.repoPath,
+    }
+  );
 
   return stdout;
 }
