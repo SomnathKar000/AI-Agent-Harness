@@ -291,5 +291,23 @@ describe('Sandbox Security and Lifecycle Integration Tests', { timeout: 60000 },
       expect(diff).toContain('items.slice(startIndex, endIndex)');
       expect(diff).toContain('[]');
     });
+
+    it('execa("git") only appears in git.ts and nowhere else in packages/sandbox/src', () => {
+      const srcDir = path.resolve(import.meta.dirname, '../src');
+      const files = fs.readdirSync(srcDir).filter((f) => f.endsWith('.ts'));
+
+      const violations: string[] = [];
+      const gitCallRegex = /execa\s*\(\s*['"`]git['"`]/;
+
+      for (const file of files) {
+        if (file === 'git.ts') continue;
+        const content = fs.readFileSync(path.join(srcDir, file), 'utf8');
+        if (gitCallRegex.test(content)) {
+          violations.push(file);
+        }
+      }
+
+      expect(violations).toEqual([]);
+    });
   });
 });

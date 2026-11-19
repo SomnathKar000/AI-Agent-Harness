@@ -1,6 +1,7 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import Docker from 'dockerode';
-import { execa } from 'execa';
+import { runGit } from './git.js';
 import type { DestroyTarget, Workspace } from './types.js';
 
 const docker = new Docker();
@@ -44,33 +45,50 @@ export async function destroy(
   // 2. Clean up git worktree and branch if provided
   if (workspace) {
     try {
-      await execa('git', ['worktree', 'remove', '--force', workspace.worktreePath], {
-        cwd: workspace.repoPath,
-      });
+      await runGit(workspace.repoPath, [
+        'worktree',
+        'remove',
+        '--force',
+        workspace.worktreePath,
+      ]);
     } catch {
       // Worktree removal via git may fail if already unlinked
     }
 
     if (fs.existsSync(workspace.worktreePath)) {
       try {
-        await fs.promises.rm(workspace.worktreePath, { recursive: true, force: true });
+        await fs.promises.rm(workspace.worktreePath, {
+          recursive: true,
+          force: true,
+        });
       } catch {
         // Fallback cleanup
       }
     }
 
+    // Clean up .git/worktrees/<taskId> in repo if still present
+    const wtGitDir = path.join(
+      workspace.repoPath,
+      '.git',
+      'worktrees',
+      workspace.taskId
+    );
+    if (fs.existsSync(wtGitDir)) {
+      try {
+        await fs.promises.rm(wtGitDir, { recursive: true, force: true });
+      } catch {
+        // Ignore
+      }
+    }
+
     try {
-      await execa('git', ['branch', '-D', workspace.branch], {
-        cwd: workspace.repoPath,
-      });
+      await runGit(workspace.repoPath, ['branch', '-D', workspace.branch]);
     } catch {
       // Branch may not exist
     }
 
     try {
-      await execa('git', ['worktree', 'prune'], {
-        cwd: workspace.repoPath,
-      });
+      await runGit(workspace.repoPath, ['worktree', 'prune']);
     } catch {
       // Worktree prune best effort
     }
