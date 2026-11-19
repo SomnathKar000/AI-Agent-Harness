@@ -9,5 +9,12 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "lint": "eslint ."
+  },
+  "dependencies": {
+    "dockerode": "^5.0.1",
+    "execa": "^10.2.1"
+  },
+  "devDependencies": {
+    "@types/dockerode": "^4.0.2"
   }
 }
