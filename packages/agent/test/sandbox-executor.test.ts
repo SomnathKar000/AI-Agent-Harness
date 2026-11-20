@@ -224,4 +224,33 @@ describe('SandboxToolExecutor unit tests', () => {
       expect.arrayContaining(['node', '-e', expect.any(String), 'unknown-file.txt', '1', '5'])
     );
   });
+
+  it('uses stat -L -c "%F %s" in exec to verify file type and size, rejecting non-regular files and huge symlinks', async () => {
+    const mockReadFile = vi.fn().mockResolvedValue('file content');
+    const mockWriteFile = vi.fn();
+    const mockListDir = vi.fn();
+    const mockExec = vi.fn().mockImplementation(async (cmd: string[]) => {
+      if (cmd[0] === 'stat') {
+        expect(cmd).toEqual(['stat', '-L', '-c', '%F %s', 'my-fifo']);
+        return {
+          exitCode: 0,
+          stdout: 'fifo 0\n',
+          stderr: '',
+          timedOut: false,
+        };
+      }
+      return { exitCode: 1, stdout: '', stderr: '', timedOut: false };
+    });
+
+    const executor = new SandboxToolExecutor({
+      readFile: mockReadFile,
+      writeFile: mockWriteFile,
+      listDir: mockListDir,
+      exec: mockExec,
+    });
+
+    // Whole file read of a FIFO must fail without calling sandbox.readFile
+    await expect(executor.readFile('my-fifo')).rejects.toThrow(/cannot determine file size|not a regular file/i);
+    expect(mockReadFile).not.toHaveBeenCalled();
+  });
 });

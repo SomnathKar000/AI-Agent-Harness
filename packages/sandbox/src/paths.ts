@@ -69,30 +69,172 @@ export function resolveSafePath(workspaceRoot: string, userPath: string): string
   return candidate;
 }
 
+export const DEFAULT_FILE_OP_TIMEOUT_MS = 5000;
+export const MAX_HOST_READ_BYTES = 5 * 1024 * 1024; // 5MB
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number = DEFAULT_FILE_OP_TIMEOUT_MS,
+  opName = 'File operation'
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${opName} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export interface FileOpOptions {
+  timeoutMs?: number;
+  maxBytes?: number;
+}
+
 export async function readFile(
   workspaceRoot: string,
   userPath: string,
-  encoding: BufferEncoding = 'utf8'
+  encoding: BufferEncoding = 'utf8',
+  options?: FileOpOptions
 ): Promise<string> {
-  const safePath = resolveSafePath(workspaceRoot, userPath);
-  return fs.promises.readFile(safePath, encoding);
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_FILE_OP_TIMEOUT_MS;
+  const maxBytes = options?.maxBytes ?? MAX_HOST_READ_BYTES;
+
+  return withTimeout(
+    (async () => {
+      const safePath = resolveSafePath(workspaceRoot, userPath);
+      let handle: fs.promises.FileHandle | undefined;
+      try {
+        handle = await fs.promises.open(
+          safePath,
+          fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
+        );
+        const stats = await handle.stat();
+        if (!stats.isFile()) {
+          throw new Error(`Not a regular file: ${userPath}`);
+        }
+        if (stats.size > maxBytes) {
+          throw new Error(
+            `File is too large (${stats.size} bytes exceeds limit of ${maxBytes} bytes)`
+          );
+        }
+        const buffer = await handle.readFile({ encoding });
+        return buffer;
+      } finally {
+        if (handle) {
+          await handle.close();
+        }
+      }
+    })(),
+    timeoutMs,
+    'readFile'
+  );
 }
 
 export async function writeFile(
   workspaceRoot: string,
   userPath: string,
   content: string | Uint8Array,
-  encoding: BufferEncoding = 'utf8'
+  encoding: BufferEncoding = 'utf8',
+  options?: { timeoutMs?: number }
 ): Promise<void> {
-  const safePath = resolveSafePath(workspaceRoot, userPath);
-  await fs.promises.mkdir(path.dirname(safePath), { recursive: true });
-  await fs.promises.writeFile(safePath, content, encoding);
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_FILE_OP_TIMEOUT_MS;
+
+  return withTimeout(
+    (async () => {
+      const safePath = resolveSafePath(workspaceRoot, userPath);
+      await fs.promises.mkdir(path.dirname(safePath), { recursive: true });
+      let handle: fs.promises.FileHandle | undefined;
+      try {
+        handle = await fs.promises.open(
+          safePath,
+          fs.constants.O_WRONLY |
+            fs.constants.O_CREAT |
+            fs.constants.O_TRUNC |
+            fs.constants.O_NOFOLLOW |
+            fs.constants.O_NONBLOCK
+        );
+        const stats = await handle.stat();
+        if (!stats.isFile()) {
+          throw new Error(`Not a regular file: ${userPath}`);
+        }
+        await handle.writeFile(content, { encoding });
+      } finally {
+        if (handle) {
+          await handle.close();
+        }
+      }
+    })(),
+    timeoutMs,
+    'writeFile'
+  );
 }
 
 export async function listDir(
   workspaceRoot: string,
-  userPath: string = '.'
+  userPath: string = '.',
+  options?: { timeoutMs?: number }
 ): Promise<string[]> {
-  const safePath = resolveSafePath(workspaceRoot, userPath);
-  return fs.promises.readdir(safePath);
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_FILE_OP_TIMEOUT_MS;
+
+  return withTimeout(
+    (async () => {
+      const safePath = resolveSafePath(workspaceRoot, userPath);
+      let handle: fs.promises.FileHandle | undefined;
+      try {
+        handle = await fs.promises.open(
+          safePath,
+          fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
+        );
+        const stats = await handle.stat();
+        if (!stats.isDirectory()) {
+          throw new Error(`Not a directory: ${userPath}`);
+        }
+      } finally {
+        if (handle) {
+          await handle.close();
+        }
+      }
+      return fs.promises.readdir(safePath);
+    })(),
+    timeoutMs,
+    'listDir'
+  );
 }
+
+export async function stat(
+  workspaceRoot: string,
+  userPath: string,
+  options?: { timeoutMs?: number }
+): Promise<fs.Stats> {
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_FILE_OP_TIMEOUT_MS;
+
+  return withTimeout(
+    (async () => {
+      const safePath = resolveSafePath(workspaceRoot, userPath);
+      let handle: fs.promises.FileHandle | undefined;
+      try {
+        handle = await fs.promises.open(
+          safePath,
+          fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
+        );
+        const stats = await handle.stat();
+        if (!stats.isFile()) {
+          throw new Error(`Not a regular file: ${userPath}`);
+        }
+        return stats;
+      } finally {
+        if (handle) {
+          await handle.close();
+        }
+      }
+    })(),
+    timeoutMs,
+    'stat'
+  );
+}
+

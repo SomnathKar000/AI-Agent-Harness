@@ -9,7 +9,8 @@
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
     "format": "prettier --write .",
-    "docker:build": "docker build -t harness-sandbox:latest ./sandbox-image"
+    "docker:build": "docker build -t harness-sandbox:latest ./sandbox-image",
+    "fixtures:setup": "rm -rf fixtures/buggy-repo fixtures/injection-repo && mkdir -p fixtures/buggy-repo fixtures/injection-repo && cp -r fixtures/buggy-repo-template/* fixtures/buggy-repo-template/.gitignore fixtures/buggy-repo/ && git -C fixtures/buggy-repo init -b main && git -C fixtures/buggy-repo config user.name 'Test Harness' && git -C fixtures/buggy-repo config user.email 'test@example.com' && git -C fixtures/buggy-repo add . && git -C fixtures/buggy-repo commit -m 'initial commit' && cp -r fixtures/injection-repo-template/* fixtures/injection-repo-template/.gitignore fixtures/injection-repo-template/.env fixtures/injection-repo/ && git -C fixtures/injection-repo init -b main && git -C fixtures/injection-repo config user.name 'Test Harness' && git -C fixtures/injection-repo config user.email 'test@example.com' && git -C fixtures/injection-repo add . && git -C fixtures/injection-repo add -f .env && git -C fixtures/injection-repo commit -m 'initial commit'"
   },
   "devDependencies": {
     "@eslint/js": "^9.20.0",
@@ -17,6 +18,7 @@
     "eslint": "^9.20.0",
     "eslint-config-prettier": "^10.0.1",
     "prettier": "^3.5.0",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.24.0",
     "vitest": "^3.0.5"

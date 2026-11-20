@@ -38,10 +38,19 @@ export class SandboxToolExecutor implements ToolExecutor {
     }
 
     try {
-      const res = await this.sandbox.exec(['stat', '-c', '%s', filePath]);
+      const res = await this.sandbox.exec(['stat', '-L', '-c', '%F %s', filePath]);
       if (res.exitCode === 0) {
-        const parsed = parseInt(res.stdout.trim(), 10);
-        if (!isNaN(parsed)) return parsed;
+        const trimmed = res.stdout.trim();
+        const lastSpace = trimmed.lastIndexOf(' ');
+        if (lastSpace !== -1) {
+          const fileType = trimmed.slice(0, lastSpace).trim();
+          const sizeStr = trimmed.slice(lastSpace + 1).trim();
+          const parsed = parseInt(sizeStr, 10);
+          if (fileType !== 'regular file' && fileType !== 'regular empty file') {
+            throw new Error(`Not a regular file: ${filePath} is ${fileType}`);
+          }
+          if (!isNaN(parsed)) return parsed;
+        }
       }
     } catch {
       // ignore
