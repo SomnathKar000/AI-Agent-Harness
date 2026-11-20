@@ -1,0 +1,9 @@
+{
+  "TODO": "Fill in real prices from the Anthropic pricing page. Do not guess prices.",
+  "claude-sonnet-5-5": {
+    "input": 0,
+    "output": 0,
+    "cache_write": 0,
+    "cache_read": 0
+  }
+}
