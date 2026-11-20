@@ -34,3 +34,8 @@ The Phase 5 verifier must reject task results if the diff contains:
 - Any modifications to `package.json` scripts (`scripts` field additions, edits, or removals).
 - Any modifications to policy files (`policy/**`, `*.policy.yaml`, `*.policy.yml`).
 - Any test files deleted, disabled/skipped (`.skip`, `xit`, `it.todo`), or assertion removals.
+
+## Secret Masking & Known Limitations
+- **Exact String Masking**: Secret values collected from the worktree at task start (`.env*`, `.netrc`, `.npmrc`, `.pypirc`, `*.pem`, `*.key`, `id_rsa*`, etc.) are held in host memory and masked (`[REDACTED]`) from all tool outputs before truncation, database logging (`task_steps`, `audit_log`, `approvals`), and returning results to the model.
+- **KNOWN LIMITATION: Separator-Split Secrets**: Separator-split secrets (e.g. an attacker script reading a secret and printing it character-by-character or split by separators such as `c-a-n-a-r-y`) or encoded/transformed variants are not matched by exact substring replacement and will NOT be masked.
+- **Keep Real Secrets Out of the Worktree**: While container network isolation (`NetworkMode: none`) blocks exfiltration channels, real secrets must never be placed inside the worktree repository. Use placeholder test fixtures only.

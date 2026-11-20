@@ -13,16 +13,290 @@ const MAX_PATH_LENGTH = 1024;
 const MAX_ARGV_LENGTH = 4096;
 const MAX_FILE_SIZE = 1024 * 1024; // 1MB
 
+export interface PathProtectionResult extends EvaluationResult {
+  protected: boolean;
+}
+
+export function isInside(root: string, target: string): boolean {
+  let realRoot: string;
+  try {
+    realRoot = fs.realpathSync(root);
+  } catch {
+    realRoot = path.resolve(root);
+  }
+  const cleanTarget = path.normalize(target);
+  const absTarget = path.isAbsolute(cleanTarget)
+    ? path.resolve(cleanTarget)
+    : path.resolve(realRoot, cleanTarget);
+  const rel = path.relative(realRoot, absTarget);
+  const outside = rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel);
+  return !outside;
+}
+
+export function resolveReal(root: string, targetPath: string): string {
+  let realRoot: string;
+  try {
+    realRoot = fs.realpathSync(root);
+  } catch {
+    realRoot = path.resolve(root);
+  }
+
+  const cleanTarget = path.normalize(targetPath);
+  const absTarget = path.isAbsolute(cleanTarget)
+    ? path.resolve(cleanTarget)
+    : path.resolve(realRoot, cleanTarget);
+
+  let curr = absTarget;
+  const segments: string[] = [];
+
+  while (true) {
+    try {
+      fs.lstatSync(curr);
+      break;
+    } catch {
+      const parent = path.dirname(curr);
+      if (parent === curr) {
+        break;
+      }
+      segments.unshift(path.basename(curr));
+      curr = parent;
+    }
+  }
+
+  const realCurr = fs.realpathSync(curr);
+  return segments.length > 0 ? path.resolve(realCurr, ...segments) : realCurr;
+}
+
+function getNormalizedVariants(str: string): string[] {
+  const nfc = str.normalize('NFC').toLowerCase();
+  const nfd = str.normalize('NFD').toLowerCase();
+  return Array.from(new Set([nfc, nfd]));
+}
+
+export function isPathProtected(
+  relPath: string,
+  policy: PolicyConfig,
+  op: 'read' | 'write' | 'edit' | 'list' | 'grep',
+  ctx?: PolicyContext
+): PathProtectionResult {
+  // 1. Check absolute policy file
+  if (ctx?.policyFile) {
+    const realPolicy = path.resolve(ctx.policyFile).toLowerCase();
+    const absDirect = path.isAbsolute(relPath)
+      ? path.resolve(relPath)
+      : ctx.workspaceRoot
+      ? path.resolve(ctx.workspaceRoot, relPath)
+      : undefined;
+    if (absDirect && path.resolve(absDirect).toLowerCase() === realPolicy) {
+      return {
+        protected: true,
+        decision: 'deny',
+        reason: 'Access to policy file is forbidden',
+        rule: 'policy_access_deny',
+      };
+    }
+  }
+
+  // 2. Check absolute audit locations
+  if (ctx?.auditLocations && ctx.auditLocations.length > 0) {
+    const absDirect = path.isAbsolute(relPath)
+      ? path.resolve(relPath)
+      : ctx.workspaceRoot
+      ? path.resolve(ctx.workspaceRoot, relPath)
+      : undefined;
+    if (absDirect) {
+      const resolvedDirect = path.resolve(absDirect).toLowerCase();
+      for (const loc of ctx.auditLocations) {
+        const realLoc = path.resolve(loc).toLowerCase();
+        if (resolvedDirect === realLoc || resolvedDirect.startsWith(realLoc + path.sep)) {
+          return {
+            protected: true,
+            decision: 'deny',
+            reason: 'Access to audit files is forbidden',
+            rule: 'audit_access_deny',
+          };
+        }
+      }
+    }
+  }
+
+  // 3. Build path variants (lexical and real)
+  const normRel = path.normalize(relPath).split(path.sep).join('/');
+  const variants = new Set<string>(getNormalizedVariants(normRel));
+  const filenameVariants = new Set<string>(getNormalizedVariants(path.basename(normRel)));
+
+  if (ctx?.workspaceRoot) {
+    try {
+      const realTarget = resolveReal(ctx.workspaceRoot, relPath);
+      let realRoot: string;
+      try {
+        realRoot = fs.realpathSync(ctx.workspaceRoot);
+      } catch {
+        realRoot = path.resolve(ctx.workspaceRoot);
+      }
+      const realRel = path.relative(realRoot, realTarget).split(path.sep).join('/');
+      for (const v of getNormalizedVariants(realRel)) {
+        variants.add(v);
+      }
+      for (const f of getNormalizedVariants(path.basename(realTarget))) {
+        filenameVariants.add(f);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 4. Deny .git/** and .git file
+  const hasGit = Array.from(variants).some((v) => {
+    const segments = v.split('/');
+    return segments.includes('.git');
+  });
+  if (hasGit) {
+    return {
+      protected: true,
+      decision: 'deny',
+      reason: 'Access to .git metadata, file, or hooks is forbidden',
+      rule: 'git_dir_deny',
+    };
+  }
+
+  // 5. Deny .env*
+  const hasEnv = Array.from(filenameVariants).some((f) => f === '.env' || f.startsWith('.env.'));
+  if (hasEnv) {
+    return {
+      protected: true,
+      decision: 'deny',
+      reason: 'Access to .env environment files is forbidden',
+      rule: 'env_file_deny',
+    };
+  }
+
+  // 6. Deny *.pem and *.key
+  const hasSecret = Array.from(filenameVariants).some((f) => f.endsWith('.pem') || f.endsWith('.key'));
+  if (hasSecret) {
+    return {
+      protected: true,
+      decision: 'deny',
+      reason: 'Access to cryptographic keys or certificates (*.pem, *.key) is forbidden',
+      rule: 'secret_file_deny',
+    };
+  }
+
+  // 7. Configured denyPatterns
+  for (const pattern of policy.files.denyPatterns) {
+    const re = new RegExp(pattern, 'i');
+    const matches =
+      Array.from(variants).some((v) => re.test(v)) ||
+      Array.from(filenameVariants).some((f) => re.test(f));
+    if (matches) {
+      return {
+        protected: true,
+        decision: 'deny',
+        reason: `Path matched deny pattern: ${pattern}`,
+        rule: 'file_pattern_deny',
+      };
+    }
+  }
+
+  // 8. Name-based policy and audit files inside workspace
+  const hasPolicyName = Array.from(variants).some(
+    (v) =>
+      v === 'policy' ||
+      v.startsWith('policy/') ||
+      v.endsWith('policy.yaml') ||
+      v.endsWith('policy.yml')
+  );
+  const hasAuditName = Array.from(variants).some(
+    (v) =>
+      v === 'audit' ||
+      v.startsWith('audit/') ||
+      v.includes('audit.log') ||
+      v.includes('audit_log')
+  );
+
+  if (hasPolicyName || hasAuditName) {
+    if (op === 'read' || op === 'grep' || op === 'list') {
+      return {
+        protected: false,
+        decision: 'allow',
+        rule: 'file_allow',
+      };
+    } else {
+      return {
+        protected: true,
+        decision: 'ask',
+        reason: hasPolicyName
+          ? 'Modifying policy files or directory requires human approval'
+          : 'Modifying audit files requires human approval',
+        rule: 'policy_audit_ask',
+      };
+    }
+  }
+
+  // 9. Check .github/** and .npmrc
+  const hasGitHub = Array.from(variants).some((v) => v === '.github' || v.startsWith('.github/'));
+  const hasNpmrc = Array.from(filenameVariants).some((f) => f === '.npmrc');
+  if (hasGitHub || hasNpmrc) {
+    if (op === 'write' || op === 'edit') {
+      return {
+        protected: true,
+        decision: 'ask',
+        reason: hasGitHub
+          ? 'Modifying CI workflows (.github/**) requires human approval'
+          : 'Modifying package manager configuration (.npmrc) requires human approval',
+        rule: hasGitHub ? 'github_ci_ask' : 'npmrc_ask',
+      };
+    } else {
+      return {
+        protected: false,
+        decision: 'allow',
+        rule: 'file_allow',
+      };
+    }
+  }
+
+  // 10. Configured askPatterns
+  for (const askRule of policy.files.askPatterns) {
+    const re = new RegExp(askRule.pattern, 'i');
+    const matches =
+      Array.from(variants).some((v) => re.test(v)) ||
+      Array.from(filenameVariants).some((f) => re.test(f));
+    if (matches && askRule.operations.includes(op)) {
+      return {
+        protected: true,
+        decision: 'ask',
+        reason: askRule.reason ?? 'File modification requires human approval',
+        rule: 'file_ask_pattern',
+      };
+    }
+  }
+
+  return {
+    protected: false,
+    decision: 'allow',
+    rule: 'file_allow',
+  };
+}
+
 export async function evaluate(
   call: ToolCall,
   ctx: PolicyContext,
   policyConfig?: PolicyConfig
 ): Promise<EvaluationResult> {
+  // Fail-closed: ctx.callCount is required
+  if (typeof ctx?.callCount !== 'number') {
+    return {
+      decision: 'deny',
+      reason: 'ctx.callCount is required and must be a number',
+      rule: 'policy_context_error',
+    };
+  }
+
   const policy = policyConfig ?? loadPolicy(ctx.policyFile);
 
   // 1. Check Task Call Count Limit
   const maxCalls = ctx.maxCallsPerTask ?? policy.limits?.maxCallsPerTask ?? 100;
-  if (ctx.callCount !== undefined && ctx.callCount > maxCalls) {
+  if (ctx.callCount > maxCalls) {
     return {
       decision: 'deny',
       reason: `Task call count limit exceeded (${ctx.callCount} > ${maxCalls})`,
@@ -62,17 +336,20 @@ export async function evaluate(
   };
 }
 
-function getNormalizedVariants(str: string): string[] {
-  const nfc = str.normalize('NFC').toLowerCase();
-  const nfd = str.normalize('NFD').toLowerCase();
-  return Array.from(new Set([nfc, nfd]));
-}
-
 function evaluateFileTool(
   call: ToolCall,
   ctx: PolicyContext,
   policy: PolicyConfig
 ): EvaluationResult {
+  // Fail closed: if path is present but not a string, deny immediately
+  if ('path' in call.input && typeof call.input.path !== 'string') {
+    return {
+      decision: 'deny',
+      reason: 'input.path must be a string',
+      rule: 'invalid_path',
+    };
+  }
+
   const rawPath = typeof call.input.path === 'string' ? call.input.path : '.';
 
   // Check path length (max 1KB)
@@ -148,13 +425,12 @@ function evaluateFileTool(
   }
 
   const cleanRawPath = path.normalize(rawPath);
-  const resolvedTarget = path.isAbsolute(cleanRawPath)
+  const absLexical = path.isAbsolute(cleanRawPath)
     ? path.resolve(cleanRawPath)
     : path.resolve(realWorkspaceRoot, cleanRawPath);
 
-  // Check direct path escape (parent traversal or absolute path outside workspace)
-  const relDirect = path.relative(realWorkspaceRoot, resolvedTarget);
-  if (relDirect.startsWith('..') || path.isAbsolute(relDirect)) {
+  // Check lexical containment
+  if (!isInside(realWorkspaceRoot, absLexical)) {
     return {
       decision: 'deny',
       reason: `Path "${rawPath}" resolves outside workspace root`,
@@ -162,247 +438,96 @@ function evaluateFileTool(
     };
   }
 
-  // Special files check (FIFO, device files, sockets) via lstat
-  let lstat: fs.Stats | undefined;
+  // Resolve REAL path using deepest existing ancestor
+  let realTarget: string;
   try {
-    lstat = fs.lstatSync(resolvedTarget);
-  } catch {
-    // File may not exist yet
-  }
-
-  if (lstat && (lstat.isFIFO() || lstat.isCharacterDevice() || lstat.isBlockDevice() || lstat.isSocket())) {
+    realTarget = resolveReal(ctx.workspaceRoot, rawPath);
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+    if (msg.includes('ELOOP') || err?.code === 'ELOOP') {
+      return {
+        decision: 'deny',
+        reason: `Symlink loop detected: "${rawPath}"`,
+        rule: 'symlink_loop',
+      };
+    }
     return {
       decision: 'deny',
-      reason: `Path "${rawPath}" is a FIFO or special device file`,
-      rule: 'special_file_deny',
+      reason: `Broken or unresolvable symlink or path: "${rawPath}"`,
+      rule: 'broken_symlink',
     };
   }
 
-  // Check symlinks
-  let realTarget: string | undefined;
-  if (lstat?.isSymbolicLink()) {
-    try {
-      realTarget = fs.realpathSync(resolvedTarget);
-    } catch {
-      return {
-        decision: 'deny',
-        reason: `Broken or unresolvable symlink "${rawPath}"`,
-        rule: 'broken_symlink',
-      };
-    }
+  // Check REAL containment
+  if (!isInside(realWorkspaceRoot, realTarget)) {
+    return {
+      decision: 'deny',
+      reason: `Path "${rawPath}" resolves outside workspace root (${realTarget})`,
+      rule: 'symlink_escape',
+    };
+  }
 
-    const relReal = path.relative(realWorkspaceRoot, realTarget);
-    if (relReal.startsWith('..') || path.isAbsolute(relReal)) {
-      return {
-        decision: 'deny',
-        reason: `Symlink "${rawPath}" points outside workspace root (${realTarget})`,
-        rule: 'symlink_escape',
-      };
-    }
-
-    // Check if symlink target is a FIFO or special device
+  // Special files check (FIFO, device files, sockets) via lstat
+  for (const p of [absLexical, realTarget]) {
     try {
-      const stat = fs.statSync(resolvedTarget);
+      const stat = fs.lstatSync(p);
       if (stat.isFIFO() || stat.isCharacterDevice() || stat.isBlockDevice() || stat.isSocket()) {
         return {
           decision: 'deny',
-          reason: `Target of symlink "${rawPath}" is a FIFO or special device file`,
+          reason: `Path "${rawPath}" is a FIFO or special device file`,
           rule: 'special_file_deny',
         };
       }
     } catch {
-      // ignore
+      // File may not exist yet
     }
   }
 
-  // Check parent symlinks if file doesn't exist yet
-  if (!lstat) {
-    let curr = path.dirname(resolvedTarget);
-    while (!fs.existsSync(curr) && curr !== path.dirname(curr)) {
-      curr = path.dirname(curr);
-    }
-    let realCurr = curr;
-    try {
-      realCurr = fs.realpathSync(curr);
-    } catch {
-      // ignore
-    }
-    const relRemainder = path.relative(curr, resolvedTarget);
-    const realFinal = path.resolve(realCurr, relRemainder);
-    const relFromWs = path.relative(realWorkspaceRoot, realFinal);
-    if (relFromWs.startsWith('..') || path.isAbsolute(relFromWs)) {
+  // Check symlink target for FIFO / special device
+  try {
+    const stat = fs.statSync(realTarget);
+    if (stat.isFIFO() || stat.isCharacterDevice() || stat.isBlockDevice() || stat.isSocket()) {
       return {
         decision: 'deny',
-        reason: `Path "${rawPath}" resolves outside workspace root via parent symlink`,
-        rule: 'symlink_escape',
+        reason: `Target of symlink "${rawPath}" is a FIFO or special device file`,
+        rule: 'special_file_deny',
       };
     }
+  } catch {
+    // ignore
   }
 
-  // Build normalized relative path variants (NFC, NFD, case-insensitive)
-  const normRel = path.relative(realWorkspaceRoot, resolvedTarget).split(path.sep).join('/');
-  const normTarget = realTarget
-    ? path.relative(realWorkspaceRoot, realTarget).split(path.sep).join('/')
-    : undefined;
-  const rawNorm = cleanRawPath.split(path.sep).join('/');
+  const op =
+    call.name === 'write_file'
+      ? 'write'
+      : call.name === 'edit_file'
+      ? 'edit'
+      : call.name === 'list_dir'
+      ? 'list'
+      : call.name === 'grep'
+      ? 'grep'
+      : 'read';
 
-  const pathVariants = [
-    ...getNormalizedVariants(normRel),
-    ...(normTarget ? getNormalizedVariants(normTarget) : []),
-    ...getNormalizedVariants(rawNorm),
-  ];
+  // Check protected names on BOTH lexical relative path and real relative path
+  const relLexical = path.relative(realWorkspaceRoot, absLexical);
+  const relReal = path.relative(realWorkspaceRoot, realTarget);
 
-  const filename = path.basename(resolvedTarget);
-  const targetFilename = realTarget ? path.basename(realTarget) : '';
-  const rawFilename = path.basename(cleanRawPath);
-  const filenameVariants = [
-    ...getNormalizedVariants(filename),
-    ...(targetFilename ? getNormalizedVariants(targetFilename) : []),
-    ...getNormalizedVariants(rawFilename),
-  ];
-
-  // Deny policy file access
-  if (ctx.policyFile) {
-    const realPolicy = path.resolve(ctx.policyFile);
-    if (resolvedTarget === realPolicy || realTarget === realPolicy) {
-      return {
-        decision: 'deny',
-        reason: 'Access to policy file is forbidden',
-        rule: 'policy_access_deny',
-      };
-    }
-  }
-  const hasPolicy = pathVariants.some(
-    (v) =>
-      v === 'policy' ||
-      v.startsWith('policy/') ||
-      v.endsWith('policy.yaml') ||
-      v.endsWith('policy.yml')
-  );
-  if (hasPolicy) {
-    return {
-      decision: 'deny',
-      reason: 'Access to policy file or directory is forbidden',
-      rule: 'policy_access_deny',
-    };
+  const lexicalCheck = isPathProtected(relLexical, policy, op, ctx);
+  if (lexicalCheck.decision !== 'allow') {
+    return lexicalCheck;
   }
 
-  // Deny audit files access
-  if (ctx.auditLocations) {
-    for (const loc of ctx.auditLocations) {
-      const realLoc = path.resolve(loc);
-      if (
-        resolvedTarget === realLoc ||
-        resolvedTarget.startsWith(realLoc + path.sep) ||
-        (realTarget && (realTarget === realLoc || realTarget.startsWith(realLoc + path.sep)))
-      ) {
-        return {
-          decision: 'deny',
-          reason: 'Access to audit files is forbidden',
-          rule: 'audit_access_deny',
-        };
-      }
-    }
-  }
-  const hasAudit = pathVariants.some(
-    (v) =>
-      v === 'audit' ||
-      v.startsWith('audit/') ||
-      v.includes('audit.log') ||
-      v.includes('audit_log')
-  );
-  if (hasAudit) {
-    return {
-      decision: 'deny',
-      reason: 'Access to audit files is forbidden',
-      rule: 'audit_access_deny',
-    };
+  const realCheck = isPathProtected(relReal, policy, op, ctx);
+  if (realCheck.decision !== 'allow') {
+    return realCheck;
   }
 
-  // Deny .git/** and .git file (case-insensitive and unicode normalized)
-  const hasGit = pathVariants.some((v) => {
-    const segments = v.split('/');
-    return segments.includes('.git');
-  });
-  if (hasGit) {
-    return {
-      decision: 'deny',
-      reason: 'Access to .git metadata, file, or hooks is forbidden',
-      rule: 'git_dir_deny',
-    };
-  }
-
-  // Deny .env* (case-insensitive and unicode normalized)
-  const hasEnv = filenameVariants.some((f) => f === '.env' || f.startsWith('.env.'));
-  if (hasEnv) {
-    return {
-      decision: 'deny',
-      reason: 'Access to .env environment files is forbidden',
-      rule: 'env_file_deny',
-    };
-  }
-
-  // Deny *.pem and *.key (case-insensitive and unicode normalized)
-  const hasSecret = filenameVariants.some((f) => f.endsWith('.pem') || f.endsWith('.key'));
-  if (hasSecret) {
-    return {
-      decision: 'deny',
-      reason: 'Access to cryptographic keys or certificates (*.pem, *.key) is forbidden',
-      rule: 'secret_file_deny',
-    };
-  }
-
-  // Configured file deny patterns
-  for (const pattern of policy.files.denyPatterns) {
-    const re = new RegExp(pattern, 'i');
-    if (pathVariants.some((v) => re.test(v))) {
-      return {
-        decision: 'deny',
-        reason: `Path matched deny pattern: ${pattern}`,
-        rule: 'file_pattern_deny',
-      };
-    }
-  }
-
-  // ASK check for writes to CI (.github/**) and .npmrc
+  // Lockfile edit check (allowed, but flagged): only if protected checks allowed and target is a lockfile
   const isWriteOp = call.name === 'write_file' || call.name === 'edit_file';
   if (isWriteOp) {
-    const hasGitHub = pathVariants.some((v) => v === '.github' || v.startsWith('.github/'));
-    if (hasGitHub) {
-      return {
-        decision: 'ask',
-        reason: 'Modifying CI workflows (.github/**) requires human approval',
-        rule: 'github_ci_ask',
-      };
-    }
-
-    const hasNpmrc = filenameVariants.some((f) => f === '.npmrc');
-    if (hasNpmrc) {
-      return {
-        decision: 'ask',
-        reason: 'Modifying package manager configuration (.npmrc) requires human approval',
-        rule: 'npmrc_ask',
-      };
-    }
-
-    // Configured ask patterns
-    for (const askRule of policy.files.askPatterns) {
-      const re = new RegExp(askRule.pattern, 'i');
-      if (pathVariants.some((v) => re.test(v))) {
-        const op = call.name === 'write_file' ? 'write' : 'edit';
-        if (askRule.operations.includes(op)) {
-          return {
-            decision: 'ask',
-            reason: askRule.reason ?? 'File modification requires human approval',
-            rule: 'file_ask_pattern',
-          };
-        }
-      }
-    }
-
-    // Lockfile edit check (allowed, but flagged)
-    const isLockfile = filenameVariants.some((f) => LOCKFILES.includes(f));
-    if (isLockfile) {
+    const baseName = path.basename(realTarget).toLowerCase();
+    const rawBase = path.basename(cleanRawPath).toLowerCase();
+    if (LOCKFILES.includes(baseName) || LOCKFILES.includes(rawBase)) {
       return {
         decision: 'allow',
         reason: 'Lockfile modification allowed with diff report flag',
@@ -426,6 +551,16 @@ function evaluateRunCommand(call: ToolCall, ctx: PolicyContext): EvaluationResul
       decision: 'deny',
       reason: 'run_command argv must be a non-empty array of strings',
       rule: 'invalid_argv',
+    };
+  }
+
+  // Command names bare name check (no / or \)
+  const argv0 = argv[0];
+  if (argv0.includes('/') || argv0.includes('\\')) {
+    return {
+      decision: 'deny',
+      reason: `Command name "${argv0}" must be a bare name without path separators`,
+      rule: 'command_path_separator_deny',
     };
   }
 
@@ -458,13 +593,13 @@ function evaluateRunCommand(call: ToolCall, ctx: PolicyContext): EvaluationResul
     }
   }
 
-  const baseCmd = path.basename(argv[0]).toLowerCase();
+  const baseCmd = argv0.toLowerCase();
 
   // 2. Reject shell wrappers
   if (SHELL_BINARIES.includes(baseCmd)) {
     return {
       decision: 'deny',
-      reason: `Shell wrapper command "${argv[0]}" is forbidden`,
+      reason: `Shell wrapper command "${argv0}" is forbidden`,
       rule: 'shell_wrapper_deny',
     };
   }
@@ -498,7 +633,7 @@ function evaluateRunCommand(call: ToolCall, ctx: PolicyContext): EvaluationResul
   }
 
   if (baseCmd === 'rm') {
-    if (argv.some((a) => a.startsWith('/') || a.startsWith('..') || a === '~')) {
+    if (argv.some((a) => a === '~' || !isInside(ctx.workspaceRoot, a))) {
       return {
         decision: 'deny',
         reason: 'rm with absolute or parent paths is forbidden',
@@ -538,8 +673,7 @@ function evaluateRunCommand(call: ToolCall, ctx: PolicyContext): EvaluationResul
       ? path.resolve(cleanScriptPath)
       : path.resolve(realWorkspaceRoot, cleanScriptPath);
 
-    const relScript = path.relative(realWorkspaceRoot, resolvedScript);
-    if (relScript.startsWith('..') || path.isAbsolute(relScript)) {
+    if (!isInside(realWorkspaceRoot, resolvedScript)) {
       return {
         decision: 'deny',
         reason: `Node script "${scriptArg}" resolves outside workspace root`,
@@ -641,8 +775,7 @@ function evaluateRunCommand(call: ToolCall, ctx: PolicyContext): EvaluationResul
         const resolvedFlagPath = path.isAbsolute(cleanPath)
           ? path.resolve(cleanPath)
           : path.resolve(realWorkspaceRoot, cleanPath);
-        const rel = path.relative(realWorkspaceRoot, resolvedFlagPath);
-        if (rel.startsWith('..') || path.isAbsolute(rel)) {
+        if (!isInside(realWorkspaceRoot, resolvedFlagPath)) {
           return {
             decision: 'deny',
             reason: `Flag "${arg}" target "${targetPath}" resolves outside workspace root`,

@@ -1,18 +1,21 @@
+# Commands are enforced in code in evaluator.ts
 version: "1.0"
 
 limits:
   maxCallsPerTask: 100
-  perCallOutputSize: 1048576
 
 files:
   denyPatterns:
-    - "^\\.env.*"
+    - "(^|/)\\.env($|/|\\..*)"
+    - "(^|/)\\.envrc($|/|\\..*)"
     - ".*\\.pem$"
     - ".*\\.key$"
-    - "^\\.git(/.*)?$"
-    - ".*policy.*\\.ya?ml$"
-    - "^audit(/.*)?$"
-    - ".*audit.*\\.log$"
+    - "(^|/)id_rsa.*"
+    - "(^|/)id_ed25519.*"
+    - ".*\\.p12$"
+    - ".*\\.pfx$"
+    - "(^|/)credentials\\.json$"
+    - "(^|/)\\.git($|/.*)"
   askPatterns:
     - pattern: "^\\.github(/.*)?$"
       operations:
@@ -24,81 +27,13 @@ files:
         - "write"
         - "edit"
       reason: "Changes to package manager configuration (.npmrc) require human approval"
-  flagPatterns:
-    - pattern: "^(pnpm-lock\\.yaml|package-lock\\.json|yarn\\.lock)$"
-      flag: "lockfile_edit"
-
-commands:
-  denyList:
-    - name: "git commands"
-      argv0: "git"
-      reason: "git commands are not permitted for the agent (the harness uses runGit on the host)"
-    - name: "curl"
-      argv0: "curl"
-      reason: "Network command curl is forbidden"
-    - name: "wget"
-      argv0: "wget"
-      reason: "Network command wget is forbidden"
-    - name: "ssh"
-      argv0: "ssh"
-      reason: "SSH connections are forbidden"
-    - name: "scp"
-      argv0: "scp"
-      reason: "SCP transfers are forbidden"
-    - name: "nc"
-      argv0: "nc"
-      reason: "Netcat connections are forbidden"
-    - name: "docker"
-      argv0: "docker"
-      reason: "Docker commands are forbidden"
-    - name: "sudo"
-      argv0: "sudo"
-      reason: "Privilege escalation (sudo) is forbidden"
-    - name: "npx"
-      argv0: "npx"
-      reason: "npx is forbidden"
-
-  askList:
-    - name: "pnpm add"
-      argv0: "pnpm"
-      subcommands:
-        - "add"
-      reason: "Adding new dependencies via pnpm requires human approval"
-    - name: "npm install/add"
-      argv0: "npm"
-      subcommands:
-        - "install"
-        - "i"
-        - "add"
-      reason: "Adding new dependencies via npm requires human approval"
-    - name: "yarn add"
-      argv0: "yarn"
-      subcommands:
-        - "add"
-      reason: "Adding new dependencies via yarn requires human approval"
-
-  allowList:
-    - argv0: "pnpm"
-      allowedPatterns:
-        - "^test$"
-        - "^run\\s+(test|lint|typecheck|build)$"
-    - argv0: "npm"
-      allowedPatterns:
-        - "^test$"
-        - "^run\\s+(test|lint|typecheck|build)$"
-    - argv0: "yarn"
-      allowedPatterns:
-        - "^test$"
-        - "^run\\s+(test|lint|typecheck|build)$"
-    - argv0: "node"
-      allowedPatterns:
-        - "^[^\\-].*"
-    - argv0: "tsc"
-      allowedPatterns:
-        - ".*"
-    - argv0: "vitest"
-      allowedPatterns:
-        - ".*"
-    - argv0: "eslint"
-      allowedPatterns:
-        - ".*"
+    - pattern: "(^|/)policy(/.*)?$|.*policy.*\\.ya?ml$"
+      operations:
+        - "write"
+        - "edit"
+      reason: "Changes to policy files or directory require human approval"
+    - pattern: ".*audit.*"
+      operations:
+        - "write"
+        - "edit"
+      reason: "Changes to audit files require human approval"

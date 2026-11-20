@@ -41,13 +41,56 @@ export async function startContainer(
   return container.id;
 }
 
+export interface InstallDependenciesOptions {
+  ignoreScripts?: boolean;
+}
+
 export async function installDependencies(
   workspace: Workspace,
-  installCommand: string | string[] = ['pnpm', 'install']
+  installCommand?: string | string[] | InstallDependenciesOptions,
+  options?: InstallDependenciesOptions
 ): Promise<ExecResult> {
-  const cmd = typeof installCommand === 'string'
-    ? ['sh', '-c', installCommand]
-    : installCommand;
+  let rawCmd: string | string[] = ['pnpm', 'install'];
+  let opts: InstallDependenciesOptions = { ignoreScripts: true };
+
+  if (typeof installCommand === 'string' || Array.isArray(installCommand)) {
+    rawCmd = installCommand;
+    if (options) {
+      opts = { ...opts, ...options };
+    }
+  } else if (installCommand && typeof installCommand === 'object') {
+    opts = { ...opts, ...installCommand };
+  }
+
+  let cmd: string[];
+  const ignore = opts.ignoreScripts !== false;
+
+  if (typeof rawCmd === 'string') {
+    let commandStr = rawCmd;
+    if (ignore) {
+      const lower = commandStr.toLowerCase();
+      if (
+        (lower.startsWith('npm ') ||
+          lower.startsWith('yarn ') ||
+          lower.startsWith('pnpm ') ||
+          lower === 'npm' ||
+          lower === 'yarn' ||
+          lower === 'pnpm') &&
+        !lower.includes('--ignore-scripts')
+      ) {
+        commandStr = `${commandStr} --ignore-scripts`;
+      }
+    }
+    cmd = ['sh', '-c', commandStr];
+  } else {
+    cmd = [...rawCmd];
+    if (ignore && cmd.length > 0) {
+      const bin = cmd[0].toLowerCase();
+      if (['npm', 'yarn', 'pnpm'].includes(bin) && !cmd.includes('--ignore-scripts')) {
+        cmd.push('--ignore-scripts');
+      }
+    }
+  }
 
   const container = await docker.createContainer({
     Image: 'harness-sandbox:latest',

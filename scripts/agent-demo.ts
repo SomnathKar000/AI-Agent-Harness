@@ -32,6 +32,7 @@ import {
   readFile as sandboxReadFile,
   writeFile as sandboxWriteFile,
   listDir as sandboxListDir,
+  collectSecretValues,
   type Workspace,
 } from '../packages/sandbox/dist/index.js';
 import {
@@ -179,12 +180,15 @@ async function runDemo(): Promise<void> {
         return rawLlm.complete({ ...opts, messages: cleanedMessages });
       },
     };
+    const secretValues = await collectSecretValues(workspace.worktreePath);
     const gate = new PolicyGate({
       ctx: {
         workspaceRoot: workspace.worktreePath,
         taskId,
+        callCount: 0,
       },
       db,
+      secretValues,
     });
     const executor = new SandboxToolExecutor({
       readFile: (p) => sandboxReadFile(workspace!.worktreePath, p),

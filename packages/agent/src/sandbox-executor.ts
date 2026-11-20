@@ -163,7 +163,8 @@ export class SandboxToolExecutor implements ToolExecutor {
   async grep(pattern: string, targetPath: string = '.'): Promise<string> {
     const result = await this.sandbox.exec([
       'grep',
-      '-rn',
+      '-I',
+      '-rnZ',
       '--exclude-dir=.git',
       '--exclude-dir=node_modules',
       '-e',

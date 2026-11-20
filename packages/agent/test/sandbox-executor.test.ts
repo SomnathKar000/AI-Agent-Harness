@@ -47,7 +47,8 @@ describe('SandboxToolExecutor unit tests', () => {
     const grepRes = await executor.grep('paginate', 'src');
     expect(mockExec).toHaveBeenCalledWith([
       'grep',
-      '-rn',
+      '-I',
+      '-rnZ',
       '--exclude-dir=.git',
       '--exclude-dir=node_modules',
       '-e',
@@ -135,7 +136,8 @@ describe('SandboxToolExecutor unit tests', () => {
     await executor.grep('-rf', 'src');
     expect(mockExec).toHaveBeenLastCalledWith([
       'grep',
-      '-rn',
+      '-I',
+      '-rnZ',
       '--exclude-dir=.git',
       '--exclude-dir=node_modules',
       '-e',
@@ -148,7 +150,8 @@ describe('SandboxToolExecutor unit tests', () => {
     await executor.grep('--help', 'packages');
     expect(mockExec).toHaveBeenLastCalledWith([
       'grep',
-      '-rn',
+      '-I',
+      '-rnZ',
       '--exclude-dir=.git',
       '--exclude-dir=node_modules',
       '-e',

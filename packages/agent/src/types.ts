@@ -94,6 +94,7 @@ export interface ToolCall {
 
 export interface PolicyGate {
   evaluate(call: ToolCall): Promise<PolicyDecision> | PolicyDecision;
+  redact?(call: ToolCall, resultText: string): string;
 }
 
 export interface LogStepParams {

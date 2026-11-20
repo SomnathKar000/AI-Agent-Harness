@@ -17,8 +17,12 @@ export async function destroy(
     containerId = target;
     workspace = workspaceArg;
   } else if (target && typeof target === 'object') {
-    containerId = target.containerId;
-    workspace = target.workspace ?? workspaceArg;
+    if ('repoPath' in target && 'worktreePath' in target) {
+      workspace = target as Workspace;
+    } else {
+      containerId = (target as DestroyTarget).containerId;
+      workspace = (target as DestroyTarget).workspace ?? workspaceArg;
+    }
   } else {
     workspace = workspaceArg;
   }

@@ -200,7 +200,7 @@ export async function executeTool(
         const entries = await executor.listDir(parsed.data.path);
         const output = Array.isArray(entries) ? entries.join('\n') : entries;
         return {
-          content: truncateToolOutput(output || '(empty directory)'),
+          content: output || '(empty directory)',
           isError: false,
         };
       }
@@ -219,7 +219,7 @@ export async function executeTool(
           parsed.data.limit
         );
         return {
-          content: truncateToolOutput(content),
+          content: content,
           isError: false,
         };
       }
@@ -268,7 +268,7 @@ export async function executeTool(
         }
         const output = await executor.grep(parsed.data.pattern, parsed.data.path);
         return {
-          content: truncateToolOutput(output),
+          content: output,
           isError: false,
         };
       }
@@ -296,7 +296,7 @@ export async function executeTool(
         }
         const combined = parts.join('\n');
         return {
-          content: truncateToolOutput(combined),
+          content: combined,
           isError: result.exitCode !== 0 || result.timedOut,
         };
       }

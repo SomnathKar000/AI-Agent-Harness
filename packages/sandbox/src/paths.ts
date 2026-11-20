@@ -238,3 +238,281 @@ export async function stat(
   );
 }
 
+type SecretFileType =
+  | 'env'
+  | 'key'
+  | 'npmrc'
+  | 'netrc'
+  | 'pypirc'
+  | 'git-credentials'
+  | 'json'
+  | 'none';
+
+function classifySecretFile(relPath: string, fileName: string): SecretFileType {
+  const normRel = relPath.split(path.sep).join('/').toLowerCase();
+  const lowerFile = fileName.toLowerCase();
+
+  if (lowerFile === '.env' || lowerFile.startsWith('.env.') || lowerFile === '.envrc') {
+    return 'env';
+  }
+  if (lowerFile.endsWith('.tfvars')) {
+    return 'env';
+  }
+  if (normRel === '.aws/credentials' || normRel.endsWith('/.aws/credentials')) {
+    return 'env';
+  }
+  if (lowerFile === '.npmrc') {
+    return 'npmrc';
+  }
+  if (lowerFile === '.netrc') {
+    return 'netrc';
+  }
+  if (lowerFile === '.pypirc') {
+    return 'pypirc';
+  }
+  if (lowerFile === '.git-credentials') {
+    return 'git-credentials';
+  }
+  if (
+    normRel === '.docker/config.json' ||
+    normRel.endsWith('/.docker/config.json') ||
+    lowerFile === 'credentials.json'
+  ) {
+    return 'json';
+  }
+  if (
+    lowerFile.endsWith('.pem') ||
+    lowerFile.endsWith('.key') ||
+    lowerFile.startsWith('id_rsa') ||
+    lowerFile.startsWith('id_ed25519') ||
+    lowerFile.endsWith('.p12') ||
+    lowerFile.endsWith('.pfx')
+  ) {
+    return 'key';
+  }
+  return 'none';
+}
+
+export async function collectSecretValues(
+  workspaceRoot: string,
+  options?: { timeoutMs?: number }
+): Promise<string[]> {
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_FILE_OP_TIMEOUT_MS;
+
+  return withTimeout(
+    (async () => {
+      const realWorkspaceRoot = fs.realpathSync(workspaceRoot);
+      const rootWithSep = realWorkspaceRoot.endsWith(path.sep)
+        ? realWorkspaceRoot
+        : realWorkspaceRoot + path.sep;
+
+      const secrets = new Set<string>();
+      const visitedDirs = new Set<string>();
+
+      async function scanDir(currentDir: string): Promise<void> {
+        let realCurrentDir: string;
+        try {
+          realCurrentDir = fs.realpathSync(currentDir);
+        } catch {
+          return;
+        }
+
+        if (
+          realCurrentDir !== realWorkspaceRoot &&
+          !realCurrentDir.startsWith(rootWithSep)
+        ) {
+          return;
+        }
+
+        if (visitedDirs.has(realCurrentDir)) {
+          return;
+        }
+        visitedDirs.add(realCurrentDir);
+
+        let entries: fs.Dirent[];
+        try {
+          entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+        } catch {
+          return;
+        }
+
+        for (const entry of entries) {
+          if (entry.name === '.git' || entry.name === 'node_modules') {
+            continue;
+          }
+
+          const fullPath = path.join(currentDir, entry.name);
+
+          if (entry.isDirectory()) {
+            await scanDir(fullPath);
+          } else if (entry.isSymbolicLink()) {
+            try {
+              const realTarget = fs.realpathSync(fullPath);
+              if (
+                realTarget !== realWorkspaceRoot &&
+                !realTarget.startsWith(rootWithSep)
+              ) {
+                continue;
+              }
+              const lstatTarget = fs.statSync(realTarget);
+              if (lstatTarget.isDirectory()) {
+                await scanDir(fullPath);
+              } else if (lstatTarget.isFile()) {
+                await processFile(fullPath, entry.name);
+              }
+            } catch {
+              // Broken or looping symlink - skip
+            }
+          } else if (entry.isFile()) {
+            await processFile(fullPath, entry.name);
+          }
+        }
+      }
+
+      async function processFile(filePath: string, fileName: string): Promise<void> {
+        const relPath = path.relative(realWorkspaceRoot, filePath);
+        const secretType = classifySecretFile(relPath, fileName);
+        if (secretType === 'none') {
+          return;
+        }
+
+        let handle: fs.promises.FileHandle | undefined;
+        try {
+          handle = await fs.promises.open(
+            filePath,
+            fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
+          );
+          const stats = await handle.stat();
+          if (!stats.isFile() || stats.size > MAX_HOST_READ_BYTES) {
+            return;
+          }
+
+          const rawContent = await handle.readFile({ encoding: 'utf8' });
+
+          if (secretType === 'json') {
+            try {
+              const parsed = JSON.parse(rawContent);
+              function extractStrings(obj: any): void {
+                if (typeof obj === 'string') {
+                  const val = obj.trim();
+                  if (val.length >= 8 && !val.includes('${')) {
+                    secrets.add(val);
+                  }
+                } else if (Array.isArray(obj)) {
+                  for (const item of obj) extractStrings(item);
+                } else if (obj && typeof obj === 'object') {
+                  for (const v of Object.values(obj)) extractStrings(v);
+                }
+              }
+              extractStrings(parsed);
+            } catch {
+              for (const line of rawContent.split(/\r?\n/)) {
+                const trimmed = line.trim();
+                if (trimmed.length >= 8 && !trimmed.includes('${')) {
+                  secrets.add(trimmed);
+                }
+              }
+            }
+            return;
+          }
+
+          const lines = rawContent.split(/\r?\n/);
+
+          if (secretType === 'env') {
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed || trimmed.startsWith('#')) continue;
+              const eqIdx = trimmed.indexOf('=');
+              if (eqIdx !== -1) {
+                let val = trimmed.slice(eqIdx + 1).trim();
+                if (
+                  (val.startsWith('"') && val.endsWith('"')) ||
+                  (val.startsWith("'") && val.endsWith("'"))
+                ) {
+                  val = val.slice(1, -1);
+                }
+                if (val.length >= 8) {
+                  secrets.add(val);
+                }
+              }
+            }
+          } else if (secretType === 'npmrc' || secretType === 'pypirc') {
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';')) continue;
+              const eqIdx = trimmed.indexOf('=');
+              if (eqIdx !== -1) {
+                let val = trimmed.slice(eqIdx + 1).trim();
+                if (
+                  (val.startsWith('"') && val.endsWith('"')) ||
+                  (val.startsWith("'") && val.endsWith("'"))
+                ) {
+                  val = val.slice(1, -1);
+                }
+                if (val.length >= 8 && !val.includes('${')) {
+                  secrets.add(val);
+                }
+              }
+            }
+          } else if (secretType === 'netrc') {
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed || trimmed.startsWith('#')) continue;
+              const tokens = trimmed.split(/\s+/);
+              for (let i = 0; i < tokens.length; i++) {
+                if (tokens[i] === 'password' && i + 1 < tokens.length) {
+                  let val = tokens[i + 1].trim();
+                  if (
+                    (val.startsWith('"') && val.endsWith('"')) ||
+                    (val.startsWith("'") && val.endsWith("'"))
+                  ) {
+                    val = val.slice(1, -1);
+                  }
+                  if (val.length >= 8 && !val.includes('${')) {
+                    secrets.add(val);
+                  }
+                }
+              }
+            }
+          } else if (secretType === 'git-credentials') {
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed || trimmed.startsWith('#')) continue;
+              if (trimmed.length >= 8 && !trimmed.includes('${')) {
+                secrets.add(trimmed);
+              }
+              const credMatch = trimmed.match(/https?:\/\/(?:[^:]+:)?([^@]+)@/);
+              if (
+                credMatch &&
+                credMatch[1] &&
+                credMatch[1].length >= 8 &&
+                !credMatch[1].includes('${')
+              ) {
+                secrets.add(credMatch[1]);
+              }
+            }
+          } else {
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (trimmed.length >= 8) {
+                secrets.add(trimmed);
+              }
+            }
+          }
+        } catch {
+          // Ignore files that cannot be opened safely
+        } finally {
+          if (handle) {
+            await handle.close();
+          }
+        }
+      }
+
+      await scanDir(workspaceRoot);
+      return Array.from(secrets);
+    })(),
+    timeoutMs,
+    'collectSecretValues'
+  );
+}
+

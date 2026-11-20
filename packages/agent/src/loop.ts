@@ -8,7 +8,7 @@ import type {
   LogStepParams,
 } from './types.js';
 import { BUGFIX_SYSTEM_PROMPT } from './prompts/bugfix.js';
-import { AGENT_TOOLS, executeTool } from './tools/index.js';
+import { AGENT_TOOLS, executeTool, truncateToolOutput } from './tools/index.js';
 import { calculateCost, getAgentModel } from './config.js';
 
 export function estimateMessageTokens(messages: LLMMessage[]): number {
@@ -281,12 +281,12 @@ export async function runAgent(
       // Allowed - execute tool
       const execResult = await executeTool(toolUse.name, toolUse.input, deps.executor);
 
-      toolResults.push({
-        type: 'tool_result',
-        tool_use_id: toolUse.id,
-        is_error: execResult.isError,
-        content: execResult.content,
-      });
+      let finalContent = execResult.content;
+      if (deps.gate.redact) {
+        finalContent = deps.gate.redact(toolCall, finalContent);
+      }
+
+      finalContent = truncateToolOutput(finalContent);
 
       await logStep({
         taskId: task.id,
@@ -294,11 +294,18 @@ export async function runAgent(
         kind: 'tool_call',
         toolName: toolUse.name,
         input: toolUse.input,
-        output: execResult.content,
+        output: finalContent,
         decision: 'allow',
         promptTokens: 0,
         completionTokens: 0,
         costUsd: 0,
+      });
+
+      toolResults.push({
+        type: 'tool_result',
+        tool_use_id: toolUse.id,
+        is_error: execResult.isError,
+        content: finalContent,
       });
 
       if (execResult.finishData) {

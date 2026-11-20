@@ -403,13 +403,20 @@ describe('Policy Engine Security & Enforcement', () => {
       expect(npmrcRes.decision).toBe('ask');
     });
 
-    it('denies "policy/Default.Policy.yaml" case-insensitively', async () => {
-      const polRes = await evaluate(
-        { id: 'c-pol', name: 'read_file', input: { path: 'policy/Default.Policy.yaml' } },
+    it('denies reading ctx.policyFile case-insensitively and returns ask for writing "policy/Default.Policy.yaml"', async () => {
+      const polReadRes = await evaluate(
+        { id: 'c-pol-read', name: 'read_file', input: { path: policyFile.replace('default.policy', 'Default.Policy') } },
         ctx,
         policy
       );
-      expect(polRes.decision).toBe('deny');
+      expect(polReadRes.decision).toBe('deny');
+
+      const polWriteRes = await evaluate(
+        { id: 'c-pol-write', name: 'write_file', input: { path: 'policy/Default.Policy.yaml', content: 'version: "1.0"' } },
+        ctx,
+        policy
+      );
+      expect(polWriteRes.decision).toBe('ask');
     });
 
     it('normalizes slashes ("./", "//", trailing slashes) and NFC/NFD unicode', async () => {
