@@ -2,6 +2,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import postgres from '../node_modules/.pnpm/postgres@4.1.1/node_modules/postgres/src/index.js';
 
 // Load .env fallback if not passed via --env-file
 const envPath = path.resolve(process.cwd(), '.env');
@@ -20,6 +21,7 @@ if (fs.existsSync(envPath)) {
     }
   }
 }
+
 import {
   createWorkspace,
   startContainer,
@@ -27,6 +29,9 @@ import {
   exec,
   destroy,
   runGit,
+  readFile as sandboxReadFile,
+  writeFile as sandboxWriteFile,
+  listDir as sandboxListDir,
   type Workspace,
 } from '../packages/sandbox/dist/index.js';
 import {
@@ -69,7 +74,7 @@ async function runDemo(): Promise<void> {
     repoId,
     title: 'Fix pagination bug in fixtures/buggy-repo',
     description:
-      'In fixtures/buggy-repo, the pagination helper in src/paginate.ts returns wrong items because of an off-by-one calculation (page * pageSize instead of (page - 1) * pageSize). Tests currently fail. Understand the bug, reproduce it with the test suite, fix the bug in src/paginate.ts, run the full test suite (pnpm test) to verify all tests pass, and call finish with summary and root_cause.',
+      'In this repository, pagination in src/paginate.ts returns wrong items and tests fail. Run `pnpm test` using run_command to see the test failure, inspect and edit src/paginate.ts to fix the issue, re-run `pnpm test` to verify all tests pass, and call finish with summary and root_cause.',
     status: 'running',
     maxSteps: 25,
     maxCostUsd: '1.00',
@@ -153,14 +158,19 @@ async function runDemo(): Promise<void> {
     console.log('\n5. Initializing agent components...');
     const llm = new ClaudeClient();
     const gate = new AllowAllGate();
-    const executor = new SandboxToolExecutor((cmd, opts) => exec(containerId!, cmd, opts));
+    const executor = new SandboxToolExecutor({
+      readFile: (p) => sandboxReadFile(workspace!.worktreePath, p),
+      writeFile: (p, c) => sandboxWriteFile(workspace!.worktreePath, p, c),
+      listDir: (p) => sandboxListDir(workspace!.worktreePath, p),
+      exec: (cmd, opts) => exec(containerId!, cmd, opts),
+    });
 
     console.log('\n6. Running agent loop (hard limits: 25 steps, $1.00, 10 minutes)...');
     const result = await runAgent(
       {
         id: taskId,
         description:
-          'In this repo, the pagination helper in src/paginate.ts returns wrong items because of an off-by-one calculation (page * pageSize instead of (page - 1) * pageSize). Tests currently fail. Run the test suite with `pnpm test` using run_command to see the failure, inspect and edit src/paginate.ts to fix the calculation, re-run `pnpm test` to verify all tests pass, and call finish with summary and root_cause.',
+          'In this repository, pagination in src/paginate.ts returns wrong items and tests fail. Run `pnpm test` using run_command to see the test failure, inspect and edit src/paginate.ts to fix the issue, re-run `pnpm test` to verify all tests pass, and call finish with summary and root_cause.',
         maxSteps: 25,
         maxCostUsd: 1.0,
         maxMinutes: 10,
@@ -193,6 +203,27 @@ async function runDemo(): Promise<void> {
     console.log('\n=== Final Git Diff ===');
     const diffResult = await runGit(workspace, ['diff']);
     console.log(diffResult.stdout.trim() || '(no diff)');
+
+    console.log('\n=== Database Task Steps Rows ===');
+    const pg = postgres(dbUrl);
+    const rows = await pg`
+      SELECT idx, kind, tool_name, decision, prompt_tokens AS input_tokens, completion_tokens AS output_tokens
+      FROM task_steps
+      WHERE task_id = ${taskId}
+      ORDER BY idx
+    `;
+    console.table(rows);
+
+    console.log('\n=== API Key Leak Check in DB ===');
+    const apiKeyPrefix = 'sk-ant';
+    const leakCheck = await pg`
+      SELECT count(*)::int AS count
+      FROM task_steps
+      WHERE task_id = ${taskId}
+        AND (input::text LIKE ${'%' + apiKeyPrefix + '%'} OR output::text LIKE ${'%' + apiKeyPrefix + '%'})
+    `;
+    console.log(`Rows containing '${apiKeyPrefix}' prefix: ${leakCheck[0].count}`);
+    await pg.end();
   } finally {
     console.log('\n7. Cleaning up container and worktree...');
     await destroy({ containerId, workspace });
