@@ -30,6 +30,7 @@ describe('Item 1: Secret Registry (collectSecretValues)', () => {
       'LONG_SECRET=super_secret_canary_12345\n' +
       'QUOTED_KEY="quoted_secret_val_999"\n' +
       'APP_TITLE=some_short_string\n' +
+      'NUMERIC_PORT=12345678\n' +
       'NON_SECRET_LONG_VAL=string_with_twenty_or_more_characters_here\n' +
       'APP_HOST=localhost\n' +
       'APP_ENV=production\n' +
@@ -67,7 +68,8 @@ describe('Item 1: Secret Registry (collectSecretValues)', () => {
     expect(secrets).toContain('super_secret_canary_12345');
     expect(secrets).toContain('quoted_secret_val_999');
     expect(secrets).not.toContain('123'); // < 8 characters
-    expect(secrets).not.toContain('some_short_string'); // key does not match regex and length < 20
+    expect(secrets).toContain('some_short_string'); // length >= 8 collected regardless of key name
+    expect(secrets).not.toContain('12345678'); // purely numeric values skipped
     expect(secrets).toContain('string_with_twenty_or_more_characters_here'); // length >= 20
     // Allowlist entries must be skipped
     expect(secrets).not.toContain('localhost');

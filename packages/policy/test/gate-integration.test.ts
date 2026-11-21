@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach, afterAll } from 'vitest';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execSync } from 'node:child_process';
 import {
   runAgent,
   type LLMClient,
@@ -378,6 +379,22 @@ describe('PolicyGate Database Integration Tests', { timeout: 30000 }, () => {
     // Run migrations on harness_test
     await runMigrations(TEST_ADMIN_URL);
     db = createDb(TEST_APP_URL);
+  });
+
+  afterEach(async () => {
+    // Assert git worktree list has only the main worktree and no harness/* branches for fixtures
+    const BUGGY_REPO = path.resolve(import.meta.dirname, '../../../fixtures/buggy-repo');
+    const INJECTION_REPO = path.resolve(import.meta.dirname, '../../../fixtures/injection-repo');
+    for (const repo of [BUGGY_REPO, INJECTION_REPO]) {
+      const wtOut = execSync('git worktree list', { cwd: repo, encoding: 'utf8' }).trim().split('\n');
+      expect(wtOut.length).toBe(1);
+      const brOut = execSync("git branch --list 'harness/*'", { cwd: repo, encoding: 'utf8' }).trim();
+      expect(brOut).toBe('');
+    }
+  });
+
+  afterAll(async () => {
+    // Completed
   });
 
   it('enforces policy with exact 1 row per tool call in task_steps, matching audit_log, and approvals', async () => {

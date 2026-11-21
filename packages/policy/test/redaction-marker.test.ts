@@ -119,4 +119,34 @@ describe('Item 3: Redaction Marker Safety', () => {
     );
     expect(editRes.decision).toBe('allow');
   });
+
+  it('allows read_file on a file containing "[REDACTED]"', async () => {
+    fs.writeFileSync(path.join(tempDir, 'src', 'redacted.txt'), 'Here is content: [REDACTED]\n');
+    const readRes = await evaluate(
+      {
+        id: 'r-redacted',
+        name: 'read_file',
+        input: { path: 'src/redacted.txt' },
+      },
+      ctx,
+      policy
+    );
+    expect(readRes.decision).toBe('allow');
+    expect(readRes.rule).toBe('file_allow');
+  });
+
+  it('deny reason explicitly names the concrete next step for the model: "Re-read the file via a path that is not masked or to ask for help"', async () => {
+    const res = await evaluate(
+      {
+        id: 'w-redact-step',
+        name: 'write_file',
+        input: { path: 'src/output.txt', content: 'Secret: [REDACTED]' },
+      },
+      ctx,
+      policy
+    );
+    expect(res.decision).toBe('deny');
+    expect(res.rule).toBe('redaction_marker_deny');
+    expect(res.reason).toContain('Re-read the file via a path that is not masked or to ask for help');
+  });
 });

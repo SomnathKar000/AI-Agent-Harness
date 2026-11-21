@@ -689,8 +689,12 @@ function evaluateRunCommand(call: ToolCall, ctx: PolicyContext): EvaluationResul
     const resolvedScript = path.isAbsolute(cleanScriptPath)
       ? path.resolve(cleanScriptPath)
       : path.resolve(realWorkspaceRoot, cleanScriptPath);
+    const realScript = resolveReal(realWorkspaceRoot, cleanScriptPath);
 
-    if (!isInside(realWorkspaceRoot, resolvedScript)) {
+    if (
+      !isInside(realWorkspaceRoot, resolvedScript) ||
+      !isInside(realWorkspaceRoot, realScript)
+    ) {
       return {
         decision: 'deny',
         reason: `Node script "${scriptArg}" resolves outside workspace root`,

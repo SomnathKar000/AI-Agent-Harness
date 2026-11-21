@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
@@ -55,22 +55,39 @@ const INJECTION_REPO_PATH = path.resolve(
 
 describe('Item 3c: Real Docker End-to-End Canary Leakage Tests', { timeout: 120000 }, () => {
   let db: Database;
+  let ws: Workspace | undefined;
+  let containerId: string | undefined;
 
   beforeAll(async () => {
     await runMigrations(TEST_ADMIN_URL);
     db = createDb(TEST_APP_URL);
   });
 
+  afterEach(async () => {
+    if (ws) {
+      try {
+        await destroy({ containerId, workspace: ws });
+      } catch {
+        // cleanup best-effort
+      }
+      ws = undefined;
+      containerId = undefined;
+    }
+    const wtList = await runGit(INJECTION_REPO_PATH, ['worktree', 'list']);
+    const wtLines = wtList.stdout.trim().split('\n');
+    expect(wtLines.length).toBe(1);
+
+    const branchList = await runGit(INJECTION_REPO_PATH, ['branch', '--list', 'harness/*']);
+    expect(branchList.stdout.trim()).toBe('');
+  });
+
   it('scenarios (i), (ii), (iii): real container + tools guarantee canary never leaks into model or DB', async () => {
     const CANARY_VALUE = 'canary-7f3a9';
+    const CANARY_PLAIN = 'plain-7f3a9';
     const taskId = `e2e-canary-${Date.now()}`;
     const repoId = `repo-${taskId}`;
 
-    let ws: Workspace | undefined;
-    let containerId: string | undefined;
-
-    try {
-      ws = await createWorkspace(INJECTION_REPO_PATH, taskId, 'main');
+    ws = await createWorkspace(INJECTION_REPO_PATH, taskId, 'main');
       await installDependencies(ws, ['pnpm', 'install']);
       containerId = await startContainer(ws, {
         memory: 512 * 1024 * 1024,
@@ -80,6 +97,7 @@ describe('Item 3c: Real Docker End-to-End Canary Leakage Tests', { timeout: 1200
 
       const secrets = await collectSecretValues(ws.worktreePath);
       expect(secrets).toContain(CANARY_VALUE);
+      expect(secrets).toContain(CANARY_PLAIN);
 
       await createRepo(db, {
         id: repoId,
@@ -307,6 +325,7 @@ describe('Item 3c: Real Docker End-to-End Canary Leakage Tests', { timeout: 1200
       // Assert CANARY never appears in any tool result given to model
       for (const output of toolResultsSeen) {
         expect(output).not.toContain(CANARY_VALUE);
+        expect(output).not.toContain(CANARY_PLAIN);
       }
 
       // Assert CANARY never appears in task_steps
@@ -316,6 +335,7 @@ describe('Item 3c: Real Docker End-to-End Canary Leakage Tests', { timeout: 1200
         .where(eq(taskSteps.taskId, taskId));
       const stepsStr = JSON.stringify(steps);
       expect(stepsStr).not.toContain(CANARY_VALUE);
+      expect(stepsStr).not.toContain(CANARY_PLAIN);
 
       // Assert CANARY never appears in audit_log
       const audits = await db
@@ -324,6 +344,7 @@ describe('Item 3c: Real Docker End-to-End Canary Leakage Tests', { timeout: 1200
         .where(eq(auditLog.taskId, taskId));
       const auditsStr = JSON.stringify(audits);
       expect(auditsStr).not.toContain(CANARY_VALUE);
+      expect(auditsStr).not.toContain(CANARY_PLAIN);
 
       // Assert CANARY never appears in approvals
       const apprs = await db
@@ -332,17 +353,7 @@ describe('Item 3c: Real Docker End-to-End Canary Leakage Tests', { timeout: 1200
         .where(eq(approvals.taskId, taskId));
       const apprsStr = JSON.stringify(apprs);
       expect(apprsStr).not.toContain(CANARY_VALUE);
-    } finally {
-      if (ws) {
-        await destroy({ containerId, workspace: ws });
-      }
-      const wtList = await runGit(INJECTION_REPO_PATH, ['worktree', 'list']);
-      const wtLines = wtList.stdout.trim().split('\n');
-      expect(wtLines.length).toBe(1);
-
-      const branchList = await runGit(INJECTION_REPO_PATH, ['branch', '--list', 'harness/*']);
-      expect(branchList.stdout.trim()).toBe('');
-    }
+      expect(apprsStr).not.toContain(CANARY_PLAIN);
   });
 
   it('KNOWN LIMITATION: separator-split secret is not masked', async () => {
@@ -350,11 +361,7 @@ describe('Item 3c: Real Docker End-to-End Canary Leakage Tests', { timeout: 1200
     const taskId = `limitation-test-${Date.now()}`;
     const repoId = `repo-${taskId}`;
 
-    let ws: Workspace | undefined;
-    let containerId: string | undefined;
-
-    try {
-      ws = await createWorkspace(INJECTION_REPO_PATH, taskId, 'main');
+    ws = await createWorkspace(INJECTION_REPO_PATH, taskId, 'main');
       containerId = await startContainer(ws);
 
       const secrets = await collectSecretValues(ws.worktreePath);
@@ -482,16 +489,5 @@ describe('Item 3c: Real Docker End-to-End Canary Leakage Tests', { timeout: 1200
       // Assert that separator-split secret IS visible (e.g. "c-a-n-a-r-y-...")
       const splitCanary = CANARY_VALUE.split('').join('-');
       expect(toolOutputSeen).toContain(splitCanary);
-    } finally {
-      if (ws) {
-        await destroy({ containerId, workspace: ws });
-      }
-      const wtList = await runGit(INJECTION_REPO_PATH, ['worktree', 'list']);
-      const wtLines = wtList.stdout.trim().split('\n');
-      expect(wtLines.length).toBe(1);
-
-      const branchList = await runGit(INJECTION_REPO_PATH, ['branch', '--list', 'harness/*']);
-      expect(branchList.stdout.trim()).toBe('');
-    }
   });
 });

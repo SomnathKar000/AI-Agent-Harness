@@ -430,7 +430,6 @@ export async function collectSecretValues(
               'production',
               'test',
             ]);
-            const SENSITIVE_KEY_REGEX = /(SECRET|TOKEN|KEY|PASS|PWD|AUTH|CRED|PRIVATE|DSN)/i;
 
             for (const line of lines) {
               const trimmed = line.trim();
@@ -449,12 +448,10 @@ export async function collectSecretValues(
                   val = val.slice(1, -1);
                 }
                 if (val.length >= 8 && !val.includes('${')) {
-                  if (ENV_ALLOWLIST.has(val.toLowerCase())) {
+                  if (ENV_ALLOWLIST.has(val.toLowerCase()) || /^\d+$/.test(val)) {
                     continue;
                   }
-                  if (SENSITIVE_KEY_REGEX.test(key) || val.length >= 20) {
-                    secrets.add(val);
-                  }
+                  secrets.add(val);
                 }
               }
             }
