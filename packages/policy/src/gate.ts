@@ -10,7 +10,6 @@ export interface PolicyGateOptions {
   policyPath?: string;
   ctx: PolicyContext;
   db?: Database;
-  recordTaskStep?: boolean;
   secretValues?: string[];
 }
 

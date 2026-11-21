@@ -166,7 +166,7 @@ describe('Item 1: One writer for task_steps', { timeout: 30000 }, () => {
       },
     };
 
-    // PolicyGate constructed with recordTaskStep: true and db
+    // PolicyGate constructed with db (task_steps written only by agent loop)
     const gate = new PolicyGate({
       ctx: {
         workspaceRoot: tempDir,
@@ -174,7 +174,6 @@ describe('Item 1: One writer for task_steps', { timeout: 30000 }, () => {
         callCount: 0,
       },
       db,
-      recordTaskStep: true,
     });
 
     const executor: ToolExecutor = {
@@ -233,5 +232,11 @@ describe('Item 1: One writer for task_steps', { timeout: 30000 }, () => {
 
     expect(toolCallSteps[3].decision).toBe('allow');
     expect(toolCallSteps[3].toolName).toBe('finish');
+  });
+
+  it('PolicyGateOptions interface and PolicyGate class do not declare or accept dead config', () => {
+    const gateTs = fs.readFileSync(path.resolve(import.meta.dirname, '../src/gate.ts'), 'utf8');
+    const targetProp = ['record', 'Task', 'Step'].join('');
+    expect(gateTs).not.toContain(targetProp);
   });
 });

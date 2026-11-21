@@ -781,7 +781,6 @@ describe('Policy Engine Security & Enforcement', () => {
         policy,
         ctx: { ...ctx, taskId: 'task-123' },
         db: mockDb,
-        recordTaskStep: true,
       });
 
       // 1. Evaluate an ASK command (dependency add)

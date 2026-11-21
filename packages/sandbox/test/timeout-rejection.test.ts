@@ -31,7 +31,7 @@ describe('Item 5: collectSecretValues timeout', () => {
     );
   });
 
-  it('caller fails the task when collectSecretValues rejects rather than continuing with empty secrets []', async () => {
+  it('collectSecretValues rejects on timeout so a caller cannot silently continue with []', async () => {
     async function startTaskWithSecrets(workspaceRoot: string, opts?: { timeoutMs?: number }) {
       // Must NOT do: const secrets = await collectSecretValues(...).catch(() => []);
       const secrets = await collectSecretValues(workspaceRoot, opts);

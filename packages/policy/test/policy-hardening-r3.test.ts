@@ -128,7 +128,6 @@ describe('Phase 4 Hardening Round 3 Unit Tests', () => {
         ctx,
         policy,
         db: mockDb,
-        recordTaskStep: true,
         secretValues: ['canary-7f3a9'],
       });
 
