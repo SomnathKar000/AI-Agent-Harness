@@ -120,7 +120,21 @@ importers:
         specifier: ^4.0.2
         version: 4.0.2
 
-  packages/verifier: {}
+  packages/verifier:
+    dependencies:
+      '@harness/core':
+        specifier: workspace:*
+        version: link:../core
+      '@harness/db':
+        specifier: workspace:*
+        version: link:../db
+      '@harness/sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
+    devDependencies:
+      '@harness/agent':
+        specifier: workspace:*
+        version: link:../agent
 
   packages/worker: {}
 

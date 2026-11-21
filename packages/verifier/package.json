@@ -9,5 +9,13 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "lint": "eslint ."
+  },
+  "dependencies": {
+    "@harness/core": "workspace:*",
+    "@harness/db": "workspace:*",
+    "@harness/sandbox": "workspace:*"
+  },
+  "devDependencies": {
+    "@harness/agent": "workspace:*"
   }
 }
