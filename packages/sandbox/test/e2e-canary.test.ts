@@ -12,6 +12,7 @@ import {
   writeFile as sandboxWriteFile,
   listDir as sandboxListDir,
   exec as sandboxExec,
+  runGit,
   type Workspace,
 } from '../src/index.js';
 import {
@@ -22,8 +23,8 @@ import {
   type CompletionResponse,
   type StepLogger,
   type LogStepParams,
-} from '../../agent/src/index.js';
-import { PolicyGate } from '../../policy/src/index.js';
+} from '@harness/agent';
+import { PolicyGate } from '@harness/policy';
 import {
   createDb,
   runMigrations,
@@ -35,7 +36,7 @@ import {
   approvals,
   eq,
   type Database,
-} from '../../db/src/index.js';
+} from '@harness/db';
 
 const ROOT_ADMIN_URL =
   process.env.DATABASE_ADMIN_URL ||
@@ -335,6 +336,12 @@ describe('Item 3c: Real Docker End-to-End Canary Leakage Tests', { timeout: 1200
       if (ws) {
         await destroy({ containerId, workspace: ws });
       }
+      const wtList = await runGit(INJECTION_REPO_PATH, ['worktree', 'list']);
+      const wtLines = wtList.stdout.trim().split('\n');
+      expect(wtLines.length).toBe(1);
+
+      const branchList = await runGit(INJECTION_REPO_PATH, ['branch', '--list', 'harness/*']);
+      expect(branchList.stdout.trim()).toBe('');
     }
   });
 
@@ -479,6 +486,12 @@ describe('Item 3c: Real Docker End-to-End Canary Leakage Tests', { timeout: 1200
       if (ws) {
         await destroy({ containerId, workspace: ws });
       }
+      const wtList = await runGit(INJECTION_REPO_PATH, ['worktree', 'list']);
+      const wtLines = wtList.stdout.trim().split('\n');
+      expect(wtLines.length).toBe(1);
+
+      const branchList = await runGit(INJECTION_REPO_PATH, ['branch', '--list', 'harness/*']);
+      expect(branchList.stdout.trim()).toBe('');
     }
   });
 });

@@ -372,6 +372,13 @@ function evaluateFileTool(
 
   // Check write output size limit (1MB)
   if (call.name === 'write_file' && typeof call.input.content === 'string') {
+    if (call.input.content.includes('[REDACTED]')) {
+      return {
+        decision: 'deny',
+        reason: 'Attempt to write content containing "[REDACTED]". Re-read the file via a path that is not masked or to ask for help.',
+        rule: 'redaction_marker_deny',
+      };
+    }
     const size = Buffer.byteLength(call.input.content);
     if (size > MAX_FILE_SIZE) {
       return {
@@ -384,6 +391,16 @@ function evaluateFileTool(
 
   // Check edit_file content size limit (1MB)
   if (call.name === 'edit_file') {
+    if (
+      (typeof call.input.new_string === 'string' && call.input.new_string.includes('[REDACTED]')) ||
+      (typeof call.input.old_string === 'string' && call.input.old_string.includes('[REDACTED]'))
+    ) {
+      return {
+        decision: 'deny',
+        reason: 'Attempt to edit content containing "[REDACTED]". Re-read the file via a path that is not masked or to ask for help.',
+        rule: 'redaction_marker_deny',
+      };
+    }
     if (typeof call.input.new_string === 'string') {
       const size = Buffer.byteLength(call.input.new_string);
       if (size > MAX_FILE_SIZE) {

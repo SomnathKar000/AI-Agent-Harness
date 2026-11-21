@@ -16,6 +16,15 @@ files:
     - ".*\\.pfx$"
     - "(^|/)credentials\\.json$"
     - "(^|/)\\.git($|/.*)"
+    - "(^|/)\\.netrc$"
+    - "(^|/)\\.git-credentials$"
+    - "(^|/)\\.pypirc$"
+    - "(^|/)\\.aws/credentials$"
+    - "(^|/)\\.docker/config\\.json$"
+    - ".*\\.tfvars$"
+    - ".*\\.jks$"
+    - ".*\\.keystore$"
+    - ".*\\.p8$"
   askPatterns:
     - pattern: "^\\.github(/.*)?$"
       operations:

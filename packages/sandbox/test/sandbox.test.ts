@@ -15,6 +15,7 @@ import {
   listDir,
   getDiff,
   destroy,
+  runGit,
   type Workspace,
 } from '../src/index.js';
 
@@ -44,6 +45,14 @@ describe('Sandbox Security and Lifecycle Integration Tests', { timeout: 60000 },
       }
     }
     createdWorkspaces = [];
+
+    // Assert git worktree list has only the main worktree and no harness/* branches
+    const wtList = await runGit(BUGGY_REPO_PATH, ['worktree', 'list']);
+    const wtLines = wtList.stdout.trim().split('\n');
+    expect(wtLines.length).toBe(1);
+
+    const branchList = await runGit(BUGGY_REPO_PATH, ['branch', '--list', 'harness/*']);
+    expect(branchList.stdout.trim()).toBe('');
   });
 
   describe('Path Resolution & File Operations', () => {

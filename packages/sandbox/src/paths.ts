@@ -286,7 +286,10 @@ function classifySecretFile(relPath: string, fileName: string): SecretFileType {
     lowerFile.startsWith('id_rsa') ||
     lowerFile.startsWith('id_ed25519') ||
     lowerFile.endsWith('.p12') ||
-    lowerFile.endsWith('.pfx')
+    lowerFile.endsWith('.pfx') ||
+    lowerFile.endsWith('.jks') ||
+    lowerFile.endsWith('.keystore') ||
+    lowerFile.endsWith('.p8')
   ) {
     return 'key';
   }
@@ -419,11 +422,25 @@ export async function collectSecretValues(
           const lines = rawContent.split(/\r?\n/);
 
           if (secretType === 'env') {
+            const ENV_ALLOWLIST = new Set([
+              'true',
+              'false',
+              'localhost',
+              'development',
+              'production',
+              'test',
+            ]);
+            const SENSITIVE_KEY_REGEX = /(SECRET|TOKEN|KEY|PASS|PWD|AUTH|CRED|PRIVATE|DSN)/i;
+
             for (const line of lines) {
               const trimmed = line.trim();
               if (!trimmed || trimmed.startsWith('#')) continue;
               const eqIdx = trimmed.indexOf('=');
               if (eqIdx !== -1) {
+                let key = trimmed.slice(0, eqIdx).trim();
+                if (key.startsWith('export ')) {
+                  key = key.slice(7).trim();
+                }
                 let val = trimmed.slice(eqIdx + 1).trim();
                 if (
                   (val.startsWith('"') && val.endsWith('"')) ||
@@ -431,8 +448,13 @@ export async function collectSecretValues(
                 ) {
                   val = val.slice(1, -1);
                 }
-                if (val.length >= 8) {
-                  secrets.add(val);
+                if (val.length >= 8 && !val.includes('${')) {
+                  if (ENV_ALLOWLIST.has(val.toLowerCase())) {
+                    continue;
+                  }
+                  if (SENSITIVE_KEY_REGEX.test(key) || val.length >= 20) {
+                    secrets.add(val);
+                  }
                 }
               }
             }
@@ -494,6 +516,13 @@ export async function collectSecretValues(
           } else {
             for (const line of lines) {
               const trimmed = line.trim();
+              if (
+                !trimmed ||
+                trimmed.startsWith('-----BEGIN') ||
+                trimmed.startsWith('-----END')
+              ) {
+                continue;
+              }
               if (trimmed.length >= 8) {
                 secrets.add(trimmed);
               }

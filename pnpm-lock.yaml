@@ -107,6 +107,15 @@ importers:
         specifier: ^10.2.1
         version: 10.2.1
     devDependencies:
+      '@harness/agent':
+        specifier: workspace:*
+        version: link:../agent
+      '@harness/db':
+        specifier: workspace:*
+        version: link:../db
+      '@harness/policy':
+        specifier: workspace:*
+        version: link:../policy
       '@types/dockerode':
         specifier: ^4.0.2
         version: 4.0.2

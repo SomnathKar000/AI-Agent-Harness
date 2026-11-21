@@ -24,6 +24,13 @@ describe('Item 4: installDependencies ignoreScripts', { timeout: 60000 }, () => 
       ws = undefined;
     }
     if (tempRepo && fs.existsSync(tempRepo)) {
+      const wtList = await runGit(tempRepo, ['worktree', 'list']);
+      const wtLines = wtList.stdout.trim().split('\n');
+      expect(wtLines.length).toBe(1);
+
+      const branchList = await runGit(tempRepo, ['branch', '--list', 'harness/*']);
+      expect(branchList.stdout.trim()).toBe('');
+
       fs.rmSync(tempRepo, { recursive: true, force: true });
     }
   });

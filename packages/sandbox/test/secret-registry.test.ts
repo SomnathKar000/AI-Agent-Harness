@@ -26,7 +26,17 @@ describe('Item 1: Secret Registry (collectSecretValues)', () => {
     // .env file
     fs.writeFileSync(
       path.join(workspaceDir, '.env'),
-      'SHORT=123\nLONG_SECRET=super_secret_canary_12345\nQUOTED="quoted_secret_val_999"\n'
+      'SHORT=123\n' +
+      'LONG_SECRET=super_secret_canary_12345\n' +
+      'QUOTED_KEY="quoted_secret_val_999"\n' +
+      'APP_TITLE=some_short_string\n' +
+      'NON_SECRET_LONG_VAL=string_with_twenty_or_more_characters_here\n' +
+      'APP_HOST=localhost\n' +
+      'APP_ENV=production\n' +
+      'DEBUG_MODE=true\n' +
+      'ENABLE_FLAG=false\n' +
+      'ENV_NAME=development\n' +
+      'SUITE_TYPE=test\n'
     );
 
     // .envrc file
@@ -57,7 +67,21 @@ describe('Item 1: Secret Registry (collectSecretValues)', () => {
     expect(secrets).toContain('super_secret_canary_12345');
     expect(secrets).toContain('quoted_secret_val_999');
     expect(secrets).not.toContain('123'); // < 8 characters
+    expect(secrets).not.toContain('some_short_string'); // key does not match regex and length < 20
+    expect(secrets).toContain('string_with_twenty_or_more_characters_here'); // length >= 20
+    // Allowlist entries must be skipped
+    expect(secrets).not.toContain('localhost');
+    expect(secrets).not.toContain('production');
+    expect(secrets).not.toContain('development');
+    expect(secrets).not.toContain('test');
+    expect(secrets).not.toContain('true');
+    expect(secrets).not.toContain('false');
+
+    // PEM checks: only base64 lines, not BEGIN/END headers
     expect(secrets.some((s: string) => s.includes('MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA'))).toBe(true);
+    expect(secrets).not.toContain('-----BEGIN CERTIFICATE-----');
+    expect(secrets).not.toContain('-----END CERTIFICATE-----');
+
     expect(secrets.some((s: string) => s.includes('json_secret_key_abcdef123'))).toBe(true);
   });
 

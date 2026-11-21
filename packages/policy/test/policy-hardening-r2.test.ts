@@ -345,4 +345,52 @@ commands:
       }
     });
   });
+
+  describe('Item 8: Node flags after script path & user arguments', () => {
+    it('denies flags before script path (-e, --eval, -p, etc.)', async () => {
+      const res1 = await evaluate(
+        { id: 'n-1', name: 'run_command', input: { argv: ['node', '-e', 'console.log(1)'] } },
+        ctx,
+        policy
+      );
+      expect(res1.decision).toBe('deny');
+      expect(res1.rule).toBe('node_flag_deny');
+
+      const res2 = await evaluate(
+        { id: 'n-2', name: 'run_command', input: { argv: ['node', '--eval', 'console.log(1)'] } },
+        ctx,
+        policy
+      );
+      expect(res2.decision).toBe('deny');
+      expect(res2.rule).toBe('node_flag_deny');
+    });
+
+    it('denies node running script named after a flag (e.g. node -e)', async () => {
+      const res = await evaluate(
+        { id: 'n-3', name: 'run_command', input: { argv: ['node', '-p'] } },
+        ctx,
+        policy
+      );
+      expect(res.decision).toBe('deny');
+      expect(res.rule).toBe('node_flag_deny');
+    });
+
+    it('allows node script with positional args', async () => {
+      const res = await evaluate(
+        { id: 'n-4', name: 'run_command', input: { argv: ['node', 'src/paginate.ts', 'arg1', 'arg2'] } },
+        ctx,
+        policy
+      );
+      expect(res.decision).toBe('allow');
+    });
+
+    it('allows node script with user flags if script is first positional argument', async () => {
+      const res = await evaluate(
+        { id: 'n-5', name: 'run_command', input: { argv: ['node', 'src/paginate.ts', '--port=3000', '--verbose'] } },
+        ctx,
+        policy
+      );
+      expect(res.decision).toBe('allow');
+    });
+  });
 });
