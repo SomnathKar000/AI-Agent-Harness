@@ -25,17 +25,13 @@ files:
     - ".*\\.jks$"
     - ".*\\.keystore$"
     - ".*\\.p8$"
+    - "(^|/)\\.npmrc$"
   askPatterns:
     - pattern: "^\\.github(/.*)?$"
       operations:
         - "write"
         - "edit"
       reason: "Changes to CI workflows (.github/**) require human approval"
-    - pattern: "^\\.npmrc$"
-      operations:
-        - "write"
-        - "edit"
-      reason: "Changes to package manager configuration (.npmrc) require human approval"
     - pattern: "(^|/)policy(/.*)?$|.*policy.*\\.ya?ml$"
       operations:
         - "write"

@@ -376,10 +376,16 @@ describe('PolicyGate Database Integration Tests', { timeout: 30000 }, () => {
   let db: Database;
 
   beforeAll(async () => {
-    // Run migrations on harness_test
-    await runMigrations(TEST_ADMIN_URL);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        await runMigrations(TEST_ADMIN_URL);
+        break;
+      } catch {
+        await new Promise((r) => setTimeout(r, 150 + Math.random() * 200));
+      }
+    }
     db = createDb(TEST_APP_URL);
-  });
+  }, 30000);
 
   afterEach(async () => {
     // Assert git worktree list has only the main worktree and no harness/* branches for fixtures

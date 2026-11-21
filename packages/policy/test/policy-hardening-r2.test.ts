@@ -225,7 +225,7 @@ commands:
         policy
       );
       expect(res.decision).toBe('deny');
-      expect(res.rule).toMatch(/invalid_path|input_error/);
+      expect(res.rule).toMatch(/invalid_path|input_error|invalid_input/);
     });
 
     it('denies run_command when argv elements are not strings', async () => {

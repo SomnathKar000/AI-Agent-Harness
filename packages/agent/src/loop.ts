@@ -57,18 +57,26 @@ export function elideOldestToolResults(
   }
 }
 
-function sanitizeValue(value: unknown, secret?: string): unknown {
-  if (!secret || secret.length < 5) return value;
+function maskAndTruncateValue(
+  value: unknown,
+  maskFn?: (str: string) => string,
+  maxStringLength = 2048
+): unknown {
   if (typeof value === 'string') {
-    return value.replaceAll(secret, '[REDACTED_API_KEY]');
+    let s = maskFn ? maskFn(value) : value;
+    if (s.length > maxStringLength) {
+      const truncatedBytes = Buffer.byteLength(s.slice(maxStringLength));
+      s = s.slice(0, maxStringLength) + ` [truncated ${truncatedBytes} bytes]`;
+    }
+    return s;
   }
   if (Array.isArray(value)) {
-    return value.map((item) => sanitizeValue(item, secret));
+    return value.map((item) => maskAndTruncateValue(item, maskFn, maxStringLength));
   }
   if (value !== null && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
-      out[k] = sanitizeValue(v, secret);
+      out[k] = maskAndTruncateValue(v, maskFn, maxStringLength);
     }
     return out;
   }
@@ -103,8 +111,19 @@ export async function runAgent(
     },
   ];
 
+  const maskText = (text: string): string => {
+    let masked = text;
+    if (deps.gate?.maskSecrets) {
+      masked = deps.gate.maskSecrets(masked);
+    }
+    if (apiKey && apiKey.length >= 5) {
+      masked = masked.replaceAll(apiKey, '[REDACTED_API_KEY]');
+    }
+    return masked;
+  };
+
   const logStep = async (params: LogStepParams): Promise<void> => {
-    const sanitized = sanitizeValue(params, apiKey) as LogStepParams;
+    const sanitized = maskAndTruncateValue(params, maskText) as LogStepParams;
     await deps.logger.logStep(sanitized);
   };
 

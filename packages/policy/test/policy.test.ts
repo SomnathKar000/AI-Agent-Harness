@@ -59,6 +59,30 @@ describe('Policy Engine Security & Enforcement', () => {
     fs.rmSync(outsideDir, { recursive: true, force: true });
   });
 
+  describe('Requirement 1: Default-deny', () => {
+    it('denies unknown tools', async () => {
+      const res = await evaluate(
+        { id: 'unk-1', name: 'unknown_tool', input: { foo: 'bar' } },
+        ctx,
+        policy
+      );
+      expect(res.decision).toBe('deny');
+      expect(res.rule).toBe('unknown_tool_deny');
+      expect(res.reason).toMatch(/not recognized/i);
+    });
+
+    it('denies arbitrary shell commands', async () => {
+      const res = await evaluate(
+        { id: 'arb-1', name: 'run_command', input: { argv: ['arbitrary_binary', 'arg1'] } },
+        ctx,
+        policy
+      );
+      expect(res.decision).toBe('deny');
+      expect(res.rule).toBe('default_deny');
+      expect(res.reason).toMatch(/not allowlisted/i);
+    });
+  });
+
   describe('File Tools - Path Traversal & Escapes', () => {
     it('denies parent traversal ("../../etc/passwd")', async () => {
       const res = await evaluate(
@@ -225,7 +249,7 @@ describe('Policy Engine Security & Enforcement', () => {
       expect(keyRes.decision).toBe('deny');
     });
 
-    it('returns ASK for writes to .github/** and .npmrc, but allows reading them', async () => {
+    it('returns ASK for writes to .github/** and DENY for .npmrc, but allows reading .github/**', async () => {
       const readGh = await evaluate(
         { id: '19', name: 'read_file', input: { path: '.github/workflows/ci.yml' } },
         ctx,
@@ -249,7 +273,7 @@ describe('Policy Engine Security & Enforcement', () => {
         ctx,
         policy
       );
-      expect(writeNpmrc.decision).toBe('ask');
+      expect(writeNpmrc.decision).toBe('deny');
     });
 
     it('allows lockfile edits but flags them for diff report', async () => {
@@ -400,7 +424,7 @@ describe('Policy Engine Security & Enforcement', () => {
         ctx,
         policy
       );
-      expect(npmrcRes.decision).toBe('ask');
+      expect(npmrcRes.decision).toBe('deny');
     });
 
     it('denies reading ctx.policyFile case-insensitively and returns ask for writing "policy/Default.Policy.yaml"', async () => {
@@ -771,7 +795,8 @@ describe('Policy Engine Security & Enforcement', () => {
       expect(mockApprovals[0].kind).toBe('tool_call');
       expect(mockApprovals[0].taskId).toBe('task-123');
       expect(mockAuditLog.length).toBe(1);
-      expect(mockTaskSteps.length).toBe(1);
+      // PolicyGate persistence is audit_log and approvals only; task_steps is written only by loop
+      expect(mockTaskSteps.length).toBe(0);
 
       // 2. Evaluate a DENY command (curl)
       const denyDecision = await gate.evaluate({
@@ -781,7 +806,7 @@ describe('Policy Engine Security & Enforcement', () => {
       });
       expect(denyDecision.action).toBe('deny');
       expect(mockAuditLog.length).toBe(2);
-      expect(mockTaskSteps.length).toBe(2);
+      expect(mockTaskSteps.length).toBe(0);
 
       // 3. Evaluate an ALLOW command (pnpm test)
       const allowDecision = await gate.evaluate({

@@ -70,6 +70,7 @@ export function resolveSafePath(workspaceRoot: string, userPath: string): string
 }
 
 export const DEFAULT_FILE_OP_TIMEOUT_MS = 5000;
+export const DEFAULT_SECRET_COLLECTION_TIMEOUT_MS = 30000;
 export const MAX_HOST_READ_BYTES = 5 * 1024 * 1024; // 5MB
 
 async function withTimeout<T>(
@@ -285,10 +286,6 @@ function classifySecretFile(relPath: string, fileName: string): SecretFileType {
     lowerFile.endsWith('.key') ||
     lowerFile.startsWith('id_rsa') ||
     lowerFile.startsWith('id_ed25519') ||
-    lowerFile.endsWith('.p12') ||
-    lowerFile.endsWith('.pfx') ||
-    lowerFile.endsWith('.jks') ||
-    lowerFile.endsWith('.keystore') ||
     lowerFile.endsWith('.p8')
   ) {
     return 'key';
@@ -300,7 +297,7 @@ export async function collectSecretValues(
   workspaceRoot: string,
   options?: { timeoutMs?: number }
 ): Promise<string[]> {
-  const timeoutMs = options?.timeoutMs ?? DEFAULT_FILE_OP_TIMEOUT_MS;
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_SECRET_COLLECTION_TIMEOUT_MS;
 
   return withTimeout(
     (async () => {
@@ -441,11 +438,21 @@ export async function collectSecretValues(
                   key = key.slice(7).trim();
                 }
                 let val = trimmed.slice(eqIdx + 1).trim();
-                if (
-                  (val.startsWith('"') && val.endsWith('"')) ||
-                  (val.startsWith("'") && val.endsWith("'"))
-                ) {
-                  val = val.slice(1, -1);
+                if (val.startsWith('"')) {
+                  const closeIdx = val.indexOf('"', 1);
+                  if (closeIdx !== -1) {
+                    val = val.slice(1, closeIdx);
+                  }
+                } else if (val.startsWith("'")) {
+                  const closeIdx = val.indexOf("'", 1);
+                  if (closeIdx !== -1) {
+                    val = val.slice(1, closeIdx);
+                  }
+                } else {
+                  const hashIdx = val.indexOf('#');
+                  if (hashIdx !== -1) {
+                    val = val.slice(0, hashIdx).trim();
+                  }
                 }
                 if (val.length >= 8 && !val.includes('${')) {
                   if (ENV_ALLOWLIST.has(val.toLowerCase()) || /^\d+$/.test(val)) {
@@ -462,11 +469,21 @@ export async function collectSecretValues(
               const eqIdx = trimmed.indexOf('=');
               if (eqIdx !== -1) {
                 let val = trimmed.slice(eqIdx + 1).trim();
-                if (
-                  (val.startsWith('"') && val.endsWith('"')) ||
-                  (val.startsWith("'") && val.endsWith("'"))
-                ) {
-                  val = val.slice(1, -1);
+                if (val.startsWith('"')) {
+                  const closeIdx = val.indexOf('"', 1);
+                  if (closeIdx !== -1) {
+                    val = val.slice(1, closeIdx);
+                  }
+                } else if (val.startsWith("'")) {
+                  const closeIdx = val.indexOf("'", 1);
+                  if (closeIdx !== -1) {
+                    val = val.slice(1, closeIdx);
+                  }
+                } else {
+                  const hashIdx = val.indexOf('#');
+                  if (hashIdx !== -1) {
+                    val = val.slice(0, hashIdx).trim();
+                  }
                 }
                 if (val.length >= 8 && !val.includes('${')) {
                   secrets.add(val);

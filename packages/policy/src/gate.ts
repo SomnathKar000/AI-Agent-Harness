@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import type { PolicyGate as AgentPolicyGate, PolicyDecision, ToolCall } from '@harness/agent';
-import { createApproval, appendAudit, appendStep, type Database } from '@harness/db';
+import { createApproval, appendAudit, type Database } from '@harness/db';
 import { loadPolicy } from './loader.js';
 import { evaluate, isPathProtected } from './evaluator.js';
 import type { PolicyConfig, PolicyContext } from './types.js';
@@ -18,9 +18,7 @@ export class PolicyGate implements AgentPolicyGate {
   private policy: PolicyConfig;
   private ctx: PolicyContext;
   private db?: Database;
-  private recordTaskStep: boolean;
   private secretValues: string[];
-  private stepIdx: number;
 
   constructor(options: PolicyGateOptions) {
     if (!options.ctx || !options.ctx.taskId) {
@@ -32,11 +30,9 @@ export class PolicyGate implements AgentPolicyGate {
       callCount: options.ctx?.callCount ?? 0,
     };
     this.db = options.db;
-    this.recordTaskStep = options.recordTaskStep ?? false;
     this.secretValues = (options.secretValues ?? []).filter(
       (s) => typeof s === 'string' && s.length >= 8
     );
-    this.stepIdx = 1;
   }
 
   maskSecrets(text: string): string {
@@ -89,16 +85,18 @@ export class PolicyGate implements AgentPolicyGate {
         const sanitizedCall = this.sanitizeValue(call) as ToolCall;
 
         if (res.decision === 'ask') {
+          const maskedReason = res.reason ? this.maskSecrets(res.reason) : undefined;
+          const maskedSummary = this.maskSecrets(res.reason ?? `Approval required for tool ${call.name}`);
           // Create an approval row (kind tool_call)
           await createApproval(this.db, {
             id: crypto.randomUUID(),
             taskId,
             kind: 'tool_call',
-            summary: this.maskSecrets(res.reason ?? `Approval required for tool ${call.name}`),
+            summary: maskedSummary,
             payload: {
               toolCall: sanitizedCall,
               rule: res.rule,
-              reason: res.reason,
+              reason: maskedReason,
             },
             status: 'pending',
           });
@@ -111,30 +109,11 @@ export class PolicyGate implements AgentPolicyGate {
             detail: {
               toolCall: sanitizedCall,
               rule: res.rule,
-              reason: res.reason,
+              reason: maskedReason,
             },
           });
-
-          // Log to task_steps if recordTaskStep is enabled
-          if (this.recordTaskStep) {
-            await appendStep(this.db, {
-              id: crypto.randomUUID(),
-              taskId,
-              idx: this.stepIdx++,
-              kind: 'tool_call',
-              toolName: call.name,
-              input: (sanitizedCall.input ?? {}) as any,
-              output: this.sanitizeValue({
-                decision: 'ask',
-                reason: res.reason ?? 'Approval required',
-              }) as any,
-              decision: 'ask',
-              promptTokens: 0,
-              completionTokens: 0,
-              costUsd: '0.0000',
-            });
-          }
         } else if (res.decision === 'deny') {
+          const maskedReason = res.reason ? this.maskSecrets(res.reason) : undefined;
           // Log to audit_log
           await appendAudit(this.db, {
             taskId,
@@ -143,41 +122,21 @@ export class PolicyGate implements AgentPolicyGate {
             detail: {
               toolCall: sanitizedCall,
               rule: res.rule,
-              reason: res.reason,
+              reason: maskedReason,
             },
           });
-
-          // Log to task_steps if recordTaskStep is enabled
-          if (this.recordTaskStep) {
-            await appendStep(this.db, {
-              id: crypto.randomUUID(),
-              taskId,
-              idx: this.stepIdx++,
-              kind: 'tool_call',
-              toolName: call.name,
-              input: (sanitizedCall.input ?? {}) as any,
-              output: this.sanitizeValue({
-                decision: 'deny',
-                reason: res.reason ?? 'Operation denied',
-              }) as any,
-              decision: 'deny',
-              promptTokens: 0,
-              completionTokens: 0,
-              costUsd: '0.0000',
-            });
-          }
         }
       }
 
       if (res.decision === 'allow') {
         return { action: 'allow' };
       } else if (res.decision === 'ask') {
-        return { action: 'ask', reason: res.reason };
+        return { action: 'ask', reason: res.reason ? this.maskSecrets(res.reason) : undefined };
       } else {
-        return { action: 'deny', reason: res.reason ?? 'Operation denied by policy' };
+        return { action: 'deny', reason: this.maskSecrets(res.reason ?? 'Operation denied by policy') };
       }
     } catch (err: any) {
-      const reason = `Policy error: ${err?.message || String(err)}`;
+      const reason = this.maskSecrets(`Policy error: ${err?.message || String(err)}`);
       const taskId = this.ctx?.taskId ?? 'unknown-task';
 
       if (this.db) {
@@ -193,22 +152,6 @@ export class PolicyGate implements AgentPolicyGate {
               reason,
             },
           });
-
-          if (this.recordTaskStep) {
-            await appendStep(this.db, {
-              id: crypto.randomUUID(),
-              taskId,
-              idx: this.stepIdx++,
-              kind: 'tool_call',
-              toolName: call?.name ?? 'unknown',
-              input: (this.sanitizeValue(call?.input) ?? {}) as any,
-              output: { decision: 'deny', reason },
-              decision: 'deny',
-              promptTokens: 0,
-              completionTokens: 0,
-              costUsd: '0.0000',
-            });
-          }
         } catch (auditErr) {
           console.error('Secondary audit log failure in PolicyGate:', auditErr);
         }

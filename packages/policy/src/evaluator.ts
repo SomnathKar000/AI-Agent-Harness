@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { z } from 'zod';
 import type { ToolCall } from '@harness/agent';
 import { loadPolicy } from './loader.js';
 import type { EvaluationResult, PolicyConfig, PolicyContext } from './types.js';
@@ -182,6 +183,17 @@ export function isPathProtected(
     };
   }
 
+  // 6b. Deny .npmrc
+  const hasNpmrc = Array.from(filenameVariants).some((f) => f === '.npmrc');
+  if (hasNpmrc) {
+    return {
+      protected: true,
+      decision: 'deny',
+      reason: 'Access to package manager configuration (.npmrc) is forbidden',
+      rule: 'npmrc_deny',
+    };
+  }
+
   // 7. Configured denyPatterns
   for (const pattern of policy.files.denyPatterns) {
     const re = new RegExp(pattern, 'i');
@@ -233,18 +245,15 @@ export function isPathProtected(
     }
   }
 
-  // 9. Check .github/** and .npmrc
+  // 9. Check .github/**
   const hasGitHub = Array.from(variants).some((v) => v === '.github' || v.startsWith('.github/'));
-  const hasNpmrc = Array.from(filenameVariants).some((f) => f === '.npmrc');
-  if (hasGitHub || hasNpmrc) {
+  if (hasGitHub) {
     if (op === 'write' || op === 'edit') {
       return {
         protected: true,
         decision: 'ask',
-        reason: hasGitHub
-          ? 'Modifying CI workflows (.github/**) requires human approval'
-          : 'Modifying package manager configuration (.npmrc) requires human approval',
-        rule: hasGitHub ? 'github_ci_ask' : 'npmrc_ask',
+        reason: 'Modifying CI workflows (.github/**) requires human approval',
+        rule: 'github_ci_ask',
       };
     } else {
       return {
@@ -336,11 +345,84 @@ export async function evaluate(
   };
 }
 
+const readFileSchema = z.object({
+  path: z.string(),
+  offset: z.number().optional(),
+  limit: z.number().optional(),
+});
+
+const writeFileSchema = z.object({
+  path: z.string(),
+  content: z.string(),
+});
+
+const editFileSchema = z.object({
+  path: z.string(),
+  old_string: z.string(),
+  new_string: z.string(),
+});
+
+const listDirSchema = z.object({
+  path: z.string().optional(),
+});
+
+const grepSchema = z.object({
+  pattern: z.string(),
+  path: z.string().optional(),
+});
+
 function evaluateFileTool(
   call: ToolCall,
   ctx: PolicyContext,
   policy: PolicyConfig
 ): EvaluationResult {
+  if (call.name === 'read_file') {
+    const res = readFileSchema.safeParse(call.input);
+    if (!res.success) {
+      return {
+        decision: 'deny',
+        reason: `Invalid input for read_file: ${res.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`,
+        rule: 'invalid_input',
+      };
+    }
+  } else if (call.name === 'write_file') {
+    const res = writeFileSchema.safeParse(call.input);
+    if (!res.success) {
+      return {
+        decision: 'deny',
+        reason: `Invalid input for write_file: ${res.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`,
+        rule: 'invalid_input',
+      };
+    }
+  } else if (call.name === 'edit_file') {
+    const res = editFileSchema.safeParse(call.input);
+    if (!res.success) {
+      return {
+        decision: 'deny',
+        reason: `Invalid input for edit_file: ${res.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`,
+        rule: 'invalid_input',
+      };
+    }
+  } else if (call.name === 'list_dir') {
+    const res = listDirSchema.safeParse(call.input);
+    if (!res.success) {
+      return {
+        decision: 'deny',
+        reason: `Invalid input for list_dir: ${res.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`,
+        rule: 'invalid_input',
+      };
+    }
+  } else if (call.name === 'grep') {
+    const res = grepSchema.safeParse(call.input);
+    if (!res.success) {
+      return {
+        decision: 'deny',
+        reason: `Invalid input for grep: ${res.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`,
+        rule: 'invalid_input',
+      };
+    }
+  }
+
   // Fail closed: if path is present but not a string, deny immediately
   if ('path' in call.input && typeof call.input.path !== 'string') {
     return {
