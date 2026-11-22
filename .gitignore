@@ -5,3 +5,5 @@ worktrees/
 fixtures/buggy-repo
 fixtures/injection-repo
 !fixtures/*-template/.env
+reports/
+.claude/settings.local.json

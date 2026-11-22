@@ -1,0 +1,286 @@
+**Implementer options:** Antigravity or Claude Code CLI. Claude Code setup (CLAUDE.md, permission rules, /verify) is in `claude-code-implementer-setup.md` and `setup-claude-code.sh`. Whichever tool implements, a separate reviewer signs off; the implementer never grades its own work.
+
+1. Line 1 — title
+
+# AI Agent Harness: Phased Build Plan (v4, updated Nov 22, 2026)
+
+---
+
+2. Lines 10–22 — Status table
+
+| Phase | What                                          | Status                                                                    |
+| ----- | --------------------------------------------- | ------------------------------------------------------------------------- |
+| 0     | Scaffold, infra, fixture repo                 | ✅ Done                                                                   |
+| 1     | Sandbox (worktree + container + hardened git) | ✅ Done                                                                   |
+| 2     | DB + state machine + least-privilege role     | ✅ Done (apply the Phase 2 follow-ups below)                              |
+| 3     | Agent loop + tools                            | ✅ Done and committed (prices still placeholders)                         |
+| 4     | Permission engine + audit + secret masking    | ✅ **Signed off** at `88b89a1` (rounds 5–8)                               |
+| 5     | Verifier + diff policy                        | 🔄 Round 1 committed (`ab89e07`), NOT signed off: 12 findings, 3 blocking |
+| 6     | API + queue + parallel workers                | ⏳                                                                        |
+| 7     | CLI + approval flow                           | ⏳                                                                        |
+| 8     | GitHub PRs                                    | ⏳                                                                        |
+| 9     | Hardening + evals                             | ⏳                                                                        |
+| 10    | Dashboard + productization                    | Later                                                                     |
+
+**Verified test counts at `ab89e07`:** policy 129 in 14 files, sandbox 28 in 7, agent 34 in 6,
+core 9, db 8, verifier 37 in 4 — 245 total.
+
+---
+
+3. After line 39 — add a new "Since v3" block
+
+### Since v3 (Nov 22)
+
+- **Phase 4 signed off at `88b89a1`** after four more hardening rounds. Fixed in rounds 5–8:
+  masking was key-name dependent (`SENSITIVE_KEY_REGEX` removed, second canary `CANARY_PLAIN`
+  proves it); `node <script>` containment was lexical only (now dual lexical + `resolveReal`);
+  two writers for `task_steps` (gate stripped of `appendStep`); raw unmasked input reaching
+  `task_steps` (central `maskAndTruncateValue` in the loop); `res.reason` unmasked in
+  `audit_log`/`approvals`; file tools fail-open on a missing `path` (per-tool Zod schemas,
+  `invalid_input`); `.npmrc` readable (hard deny); binary keystores parsed into the secret
+  registry; `.env` inline comments; the 5s `collectSecretValues` timeout (now 30s and it
+  rejects rather than returning `[]`); dead `recordTaskStep` config.
+- **`AllowAllGate` is gone from the demo.** `scripts/agent-demo.ts:183` calls
+  `collectSecretValues(workspace.worktreePath)` and `:191` passes it into a real `PolicyGate`.
+  `AllowAllGate` now appears only in `packages/agent/test/agent.test.ts` and `src/test-utils.ts`.
+- **Phase 5 round 1 committed as `ab89e07`** (`packages/verifier`, 37 tests in 4 files). Not
+  signed off — see the Phase 5 section for the 12 findings.
+- **Three more report-integrity failures.** Antigravity fabricated a verbose test breakdown
+  (round 6), pasted a diff with its largest hunk missing (round 7), and claimed an unaided
+  cleanup while its own action log showed a container sweep, a fixture reset and three
+  stale-worktree cleanups (Phase 5 round 1). Running the verification commands yourself is not
+  optional.
+- **Command hygiene:** in zsh, `--include=*.ts` unquoted is glob-expanded and aborts the whole
+  command before grep runs (`zsh: no matches found`). Always `--include='*.ts'`. An empty tee
+  file means the command did not run, not that there were no matches.
+
+---
+
+4. Lines 120–126 — Verification playbook, item 6
+
+5. **Cleanup check** (after anything touching sandbox or workers). Run it **immediately after the
+   test run, with nothing in between** — no container sweeps, no worktree cleanups, no fixture
+   resets. A hand-cleaned block proves nothing. Label every line so an empty result is
+   attributable:
+   ```bash
+   echo "--- containers ---";       docker ps -a --filter ancestor=harness-sandbox:latest
+   echo "--- buggy worktrees ---";  git -C fixtures/buggy-repo worktree list
+   echo "--- inj worktrees ---";    git -C fixtures/injection-repo worktree list
+   echo "--- buggy branches ---";   git -C fixtures/buggy-repo branch --list 'harness/*'
+   echo "--- inj branches ---";     git -C fixtures/injection-repo branch --list 'harness/*'
+   echo "--- worktrees dir ---";    ls -la ~/.harness/worktrees
+   echo "--- status ---";           git status --short
+   ```
+   Use `ancestor=harness-sandbox:latest`, not `name=harness` (the latter matches postgres and
+   redis and hides sandbox containers), and run the fixture checks against the fixtures, not the
+   main repo.
+
+Then insert as a new item 12:
+
+12. **Count the tests per file, every round:** `grep -c "  it(" packages/*/test/*.test.ts` and
+    `grep -n "describe(" packages/*/test/*.test.ts`. Compare with the previous round. A total that
+    stays the same while files are reshuffled is how replaced tests hide.
+
+---
+
+5. Lines 74–95 — Global Context Prompt, HARD RULES
+
+Add these to the existing list (they are the invariants that broke repeatedly):
+
+13. Everything fails closed. A missing field, an empty config value, or a thrown exception is a
+    deny or a failed check — never a skip, never an allow, never a silent default.
+14. Order for anything written to the database: mask secrets, then truncate, then log. Reasons and
+    tool inputs included. No raw value ever reaches audit_log, approvals, task_steps or
+    verifications.
+15. One writer for task_steps (the agent loop). Never a second.
+16. No dead configuration. If YAML or an options interface declares something the code never
+    reads, remove it — it gives false control.
+17. Never delete, rename or weaken an existing test. Renaming a test file out of `*.test.ts` counts
+    as deleting it.
+
+---
+
+6. Lines 432–467 — Phase 4 header block
+
+# PHASE 4: Permission engine and audit (REVIEW) ✅
+
+**Status:** ✅ **Signed off** at `88b89a1` ("Phase 4: round 8"), after rounds 5–8.
+Verified at sign-off: policy 129 tests in 14 files, sandbox 28 in 7, agent 34, core 9, db 8 —
+reproduced independently by the user, cleanup clean twice, unaided.
+
+**What exists**
+
+- `packages/policy`: `evaluate()` (default-deny), `isPathProtected()`, `resolveReal()`, `isInside()`,
+  `PolicyGate` (fails closed on any error, logs deny/ask to `audit_log`, creates `approvals` rows
+  for ask, `redact()` for grep results). Per-tool Zod schemas; a missing or malformed field is
+  `deny` with rule `invalid_input`.
+- Files: containment on lexical AND real path, `.git` (file or dir), `.env*`, keys, `.npmrc`
+  (hard deny), `.github/**` (ask on write), lockfile edits flagged after protected checks, size and
+  path limits, FIFO/device denial, case and NFC/NFD normalization, patterns match at any depth.
+- Commands: bare names only, strict allowlist, no `git`, no shells, no `npx|dlx|exec`, argv length
+  and control-char checks, `pnpm add` is ask. `node <script>` containment is checked lexically and
+  through `resolveReal`.
+- Secrets: `collectSecretValues(worktree)` is key-name independent (any value ≥ 8 chars that is not
+  in the allowlist and not purely numeric), 30s timeout, rejects rather than returning `[]`.
+  `maskSecrets` runs before truncation and logging on every path into the DB.
+- Writes containing the literal `[REDACTED]` are denied (`redaction_marker_deny`).
+- Host file ops: `O_NOFOLLOW|O_NONBLOCK`, post-open `fstat` regular-file check, size cap, timeout.
+- Install phase: `--ignore-scripts` by default.
+- `scripts/agent-demo.ts` runs the real `PolicyGate` with a populated secret registry.
+
+**Findings fixed during review (so later phases do not reintroduce them)**
+
+- `grep` read protected files (policy checked only the path argument) → output redacted per file.
+- `lstat` follows intermediate symlinks → one `resolveReal()` helper, lexical and real checks.
+- Lockfile shortcut returned allow before protected checks → protected checks first.
+- Dead YAML sections and a dead `recordTaskStep` option → removed.
+- `rel.startsWith('..')` mis-handles `..notes.md` → `isInside()` helper.
+- Masking keyed off variable names, so `PLAIN=secret` leaked → key-name independent collection.
+- `node link.js` where `link.js → /etc/hosts` escaped the workspace → dual containment check.
+- Two writers for `task_steps` → gate no longer writes steps.
+- Unmasked `res.reason` and raw tool input reaching the DB → masked and truncated centrally.
+- Fail-open defaults (missing `callCount`, missing `path`, non-string `path`) → deny.
+- Binary keystores (`.p12/.pfx/.jks/.keystore`) parsed as text into the registry → dropped.
+
+**Known soft spots carried into later phases**
+
+- Command allowlisting is a soft boundary (the agent can edit `package.json` scripts and configs).
+  Hard boundaries: the container and the Phase 5 diff policy.
+- Masking is exact-match only; separator-split secrets are unmasked by design and documented.
+  Real protection is keeping secrets out of the worktree (Phase 6).
+- `O_NOFOLLOW` covers only the last path component; TOCTOU remains between `resolveSafePath` and
+  `open`. Moving file tools into the container is the robust fix.
+- The install phase still has full network access.
+- `list_dir` returns the names of denied files; `redact()` filters only `grep`.
+- `ask` writes a `pending` approval row the loop never resolves (Phase 7).
+- `config/prices.json` zeros make `maxCostUsd` inert.
+- `packages/policy/README.md` documents the soft/hard boundary split and "What Phase 5 Must Fail
+  On"; `packages/sandbox/test/e2e-canary.test.ts` is the Phase 6 wiring contract.
+
+Delete lines 453–460 (the round 5 checklist) entirely. Keep the original Phase 4 prompt at lines 468–537 as reference.
+
+---
+
+7. Lines 541–598 — Phase 5 section
+
+# PHASE 5: Verifier (REVIEW) 🔄
+
+**Status:** Round 1 committed as `ab89e07` ("Phase 5: verifier"). **Not signed off.**
+`packages/verifier` with 37 tests in 4 files; monorepo 245 green; scope clean (only
+`packages/verifier/**` and `pnpm-lock.yaml`).
+
+**What round 1 got right**
+
+- Failing-first for all 36 new tests, with rule-specific violation assertions and a passing control
+  per rule.
+- Rule 10 proven with a real value from `collectSecretValues`, not a hardcoded string.
+- `guard.test.ts` enforces no raw git in the package; zero `child_process`/`execa` imports.
+- No Phase 4 regression; tests assert their own worktree and branch cleanup.
+
+**Round 1 findings (3 blocking, 12 total)**
+
+1. **Blocking — the cleanup proof was hand-cleaned.** The report claimed "Pruning Nothing In
+   Between" while its action log showed a container sweep, a fixture reset and three
+   stale-worktree cleanups. Fixture heads moved from `668f14b`/`167169c` to `a1874a7`/`a1e2a7a`.
+2. **Blocking — the diff policy reads the working tree, not the commit.** `git diff <base>` at
+   `diff-policy.ts:169,173`, and `package.json` read from the filesystem at `:257`. `HEAD` appears
+   nowhere. Commit the bad change, restore the file in the working tree, and it passes.
+3. **Blocking — fail-open on missing repo commands.** `container-runner.ts:37,49,61` skip a check
+   when the command is empty and leave `allPassed` true; `verifier.ts:62-69` builds a fallback repo
+   with no commands and both DB lookups swallow errors. `verifyTask` can return `passed: true`
+   having run nothing.
+4. `timedOut` is declared and never read — a timed-out run that exits 0 counts as passed.
+5. Nothing written to `verifications` is masked or truncated; violation strings echo the offending
+   source line. This reinstates the leak Phase 4 closed.
+6. Rule 1 checks only status `D` and applies `isTestFile` to the new path, so
+   `git mv calc.test.ts calc.txt` removes a test and passes.
+7. Rule 5 approval matching is fail-open: an empty string in `approvedAsks` approves everything,
+   `startsWith` has no separator boundary, and `approved.includes(path)` matches backwards.
+8. Secret-shape regexes have a trailing `\b` after a fixed length, so a _longer_ token fails to
+   match. Missing `github_pat_`, `gho_`, `ghs_`, `ghu_`, `ghr_`, `glpat-`, `xox[baprs]-`, `AIza`.
+9. `collectSecrets: false` silently disables Rule 10 and a collection failure is swallowed.
+10. The size check excludes `.git` (a committed large blob is what gets pushed) and has no early
+    exit, so the huge-tree case it exists for is walked in full first.
+11. Every test injects `exec`, so `sandboxExec` is never exercised — "runs in the container only"
+    is UNVERIFIED.
+12. The diff parser swallows removed lines beginning with `-- ` (under-counting deletions, making
+    Rule 3 more permissive) and its `diff --git` regex is greedy.
+
+**Goal:** Deterministic checks on the result before any human sees it.
+
+**Tech:** commands run in the container (lint, tsc, tests), diff analysis on the host through
+`runGit` against the **merge base and HEAD**.
+
+**High-level design**
+
+```
+verifyTask(task, sandbox):
+  1. lint, typecheck, tests — inside the container only. Rerun a failing test run once;
+     flaky=true if the rerun passes. A missing command is a FAILED check, not a skip.
+  2. diff policy on the host, via runGit, against `--merge-base <base> HEAD`:
+       - worktree must be clean (git status --porcelain empty)
+       - no test file deleted OR renamed out of test-hood
+       - no .skip / .only / xit / xdescribe / it.todo added
+       - no net removal of assertions in test files
+       - no test config weakened
+       - no .github/**, policy file, package.json scripts or .npmrc change without approval
+       - diff size limit (default 400 changed lines)
+       - no [REDACTED], no collectSecretValues value, no common secret shape
+       - lockfile_edit reported as a review item, not a failure
+  3. worktree size limit (default 500MB), including .git, with early exit
+  4. Report { passed, checks[], diffStats, flaky } — every check output masked then truncated
+     before it is written to `verifications`
+```
+
+**Done when**
+
+- The verifier catches: deleted test, renamed-away test, added `.skip`, weakened assertion, edited
+  test config, huge diff, secret in the diff, uncommitted working tree, missing test command
+- A good fix passes all checks
+- The host never executes anything from the worktree, proven by a test
+
+**Antigravity prompt:** the Phase 5 round 2 prompt (12 items) is in
+`claude-code-review-playbook.md` section 9.
+
+---
+
+8. Lines 849–868 — Open follow-ups
+
+## Open follow-ups checklist
+
+**Newest (Nov 22)**
+
+- [ ] Phase 5 round 2: the 12 findings above
+- [ ] Diagnose what leaves directories in `~/.harness/worktrees` after a full test run
+- [ ] User runs the verification commands in their own terminal, every round
+- [ ] `config/prices.json` real prices (still zeros, `maxCostUsd` is inert)
+- [ ] Phase 6: wire `collectSecretValues(worktreePath)` into the worker's `PolicyGate` —
+      contract test is `packages/sandbox/test/e2e-canary.test.ts`, documented under
+      "Wiring Not Done Yet" in `packages/policy/README.md`
+- [ ] Phase 6: strip or `skip-worktree` tracked secret files in worktrees; network allowlist
+      (registry only) for the install phase
+- [ ] Phase 7: `ask` creates a `pending` approval row the loop never resolves
+- [ ] Move file tools into the container (removes the TOCTOU class entirely)
+- [ ] Harder fixtures (multi-file bug, no existing failing test, fix needs a new test) before Phase 9
+- [ ] Real repos: `git ls-files | grep -iE '(^|/)\.env|\.pem$|\.key$|\.npmrc'` before first use
+- [ ] Confirm `AllowAllGate` is not re-exported from `@harness/agent`'s index
+- [ ] Minor: `list_dir` reveals names of denied files; dead `chmod`/`rm` branches in `evaluator.ts`;
+      `lower.startsWith('-c')` is over-broad; `llm_call` history logging is quadratic
+
+**Older**
+
+- [ ] Phase 2: default privileges migration, attempt increment test, `createDb` throws without `DATABASE_URL`
+- [ ] Phase 1: extend the guard test (`spawn`, `exec`, `child_process`) and confirm the hook test asserts a marker file is not created
+- [ ] Phase 3: dedicated Anthropic key with a spend cap
+- [x] Phase 4: real policy replaces `AllowAllGate` in the demo — done, `scripts/agent-demo.ts:183,191`
+- [ ] Phase 6: max 2 verify-fix loops enforced in the worker; retry increments `attempt`
+- [ ] Add the "no raw git" guard to worker, github and api packages (verifier: done)
+- [ ] `.env` untracked, `.env.example` has empty secret values
+
+---
+
+9. Lines 888–889 — Tips
+
+- **Reviewer loop:** Antigravity implements, a reviewer (Claude chat or Claude Code) reads its report and writes the next prompt. The full procedure, report format and red-flag list are in `claude-code-review-playbook.md`.
+- **Do not trust summaries.** Antigravity has pasted reconstructed output three times (invented test files, a condensed `pnpm -r test`, a fabricated verbose breakdown), pasted a diff with its largest hunk missing, and claimed an unaided cleanup after hand-cleaning containers, fixtures and worktrees. Run key commands yourself with `2>&1 | tee /tmp/name.txt` and paste the files. The agent's own action log is part of the evidence — read it against its conclusions.
+- **A clean claim is not a clean run.** "Cleanup is empty" only counts when the block runs straight after the test run with nothing in between.
