@@ -23,6 +23,28 @@ function isWorkspace(target: unknown): target is Workspace {
   );
 }
 
+/**
+ * Sanitizes verification check output before writing to database.
+ * Ordering: mask -> truncate -> write (same 2048-char truncation as PolicyGate).
+ */
+function sanitizeVerificationOutput(
+  output: string | null | undefined,
+  secrets: string[]
+): string | null {
+  if (output === null || output === undefined) return null;
+  let masked = String(output);
+  for (const secret of secrets) {
+    if (secret && typeof secret === 'string' && secret.length >= 8) {
+      masked = masked.replaceAll(secret, '[REDACTED]');
+    }
+  }
+  if (masked.length > 2048) {
+    const truncatedBytes = Buffer.byteLength(masked.slice(2048));
+    masked = masked.slice(0, 2048) + ` [truncated ${truncatedBytes} bytes]`;
+  }
+  return masked;
+}
+
 export async function verifyTask(
   task: Task | VerifierTask,
   sandbox: Workspace | VerifierSandbox,
@@ -45,7 +67,7 @@ export async function verifyTask(
     verifierSandbox = sandbox;
   }
 
-  // 2. Resolve repository configuration
+  // 2. Resolve repository configuration (no silent fallback - fail closed if unresolved)
   let repo: Repo | undefined = options?.repo ?? ('repo' in task ? task.repo ?? undefined : undefined);
 
   if (!repo && db && task.repoId) {
@@ -60,11 +82,29 @@ export async function verifyTask(
   }
 
   if (!repo) {
-    repo = {
-      id: task.repoId ?? 'default',
-      name: 'default-repo',
-      localPath: ws.repoPath,
-      defaultBranch: ws.baseBranch ?? 'main',
+    const failCheck: VerificationCheck = {
+      name: 'repo_resolution',
+      passed: false,
+      output: 'Failed to resolve repository configuration',
+    };
+    if (db) {
+      try {
+        await recordVerification(db, {
+          id: crypto.randomUUID(),
+          taskId: task.id,
+          check: failCheck.name,
+          passed: false,
+          output: failCheck.output ?? null,
+        });
+      } catch {
+        // ignore
+      }
+    }
+    return {
+      passed: false,
+      checks: [failCheck],
+      diffStats: { insertions: 0, deletions: 0, filesChanged: 0, totalLines: 0 },
+      flaky: false,
     };
   }
 
@@ -107,7 +147,7 @@ export async function verifyTask(
   }
 
   // STEP 2: Diff policy, computed on the host with runGit against base branch
-  const diffPolicyResult = await evaluateDiffPolicy(ws, ws.baseBranch, {
+  const diffPolicyResult = await evaluateDiffPolicy(ws, ws.baseBranch ?? 'main', {
     ...options,
     approvedAsks: Array.from(approvedAsks),
   });
@@ -130,16 +170,20 @@ export async function verifyTask(
     output: `Worktree size: ${sizeResult.sizeBytes} bytes (limit: ${sizeResult.limitBytes} bytes)`,
   });
 
-  // STEP 4: Store each result via @harness/db (verifications)
+  // STEP 4: Store each result via @harness/db (verifications), masking secrets and truncating
   if (db) {
     for (const check of allChecks) {
+      const sanitizedOutput = sanitizeVerificationOutput(
+        check.output,
+        diffPolicyResult.effectiveSecrets ?? []
+      );
       try {
         await recordVerification(db, {
           id: crypto.randomUUID(),
           taskId: task.id,
           check: check.name,
           passed: check.passed,
-          output: check.output ?? null,
+          output: sanitizedOutput,
         });
       } catch (dbErr) {
         console.error(`Failed to record verification in DB for ${check.name}:`, dbErr);

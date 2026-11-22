@@ -52,7 +52,6 @@ export interface VerifyOptions {
   maxDiffLines?: number;
   maxWorktreeBytes?: number;
   approvedAsks?: string[];
-  collectSecrets?: boolean;
   secretValues?: string[];
 }
 
@@ -61,4 +60,5 @@ export interface DiffPolicyResult {
   violations: string[];
   reviewItems: string[];
   diffStats: DiffStats;
+  effectiveSecrets: string[];
 }

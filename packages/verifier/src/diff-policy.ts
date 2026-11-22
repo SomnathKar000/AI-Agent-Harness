@@ -5,11 +5,19 @@ import type { DiffPolicyResult, DiffStats, VerifyOptions } from './types.js';
 
 export const DEFAULT_MAX_DIFF_LINES = 400;
 
-const COMMON_SECRET_PATTERNS = [
+export const COMMON_SECRET_PATTERNS = [
   { name: 'PEM private key block', regex: /-----BEGIN (?:[A-Z0-9_-]+ )?PRIVATE KEY-----/ },
-  { name: 'AWS Access Key ID (AKIA)', regex: /\bAKIA[0-9A-Z]{16}\b/ },
-  { name: 'GitHub PAT (ghp_)', regex: /\bghp_[A-Za-z0-9]{36}\b/ },
-  { name: 'Anthropic API key (sk-ant-)', regex: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/ },
+  { name: 'AWS Access Key ID (AKIA)', regex: /\bAKIA[0-9A-Z]{16,}/ },
+  { name: 'GitHub PAT (ghp_)', regex: /\bghp_[A-Za-z0-9]{36,}/ },
+  { name: 'GitHub Fine-Grained PAT (github_pat_)', regex: /\bgithub_pat_[A-Za-z0-9_]{36,}/ },
+  { name: 'GitHub OAuth token (gho_)', regex: /\bgho_[A-Za-z0-9]{36,}/ },
+  { name: 'GitHub Server-to-Server token (ghs_)', regex: /\bghs_[A-Za-z0-9]{36,}/ },
+  { name: 'GitHub User-to-Server token (ghu_)', regex: /\bghu_[A-Za-z0-9]{36,}/ },
+  { name: 'GitHub Refresh token (ghr_)', regex: /\bghr_[A-Za-z0-9]{36,}/ },
+  { name: 'GitLab PAT (glpat-)', regex: /\bglpat-[A-Za-z0-9_-]{20,}/ },
+  { name: 'Slack token (xox[baprs]-)', regex: /\bxox[baprs]-[A-Za-z0-9-]{10,}/ },
+  { name: 'Google API key (AIza)', regex: /\bAIza[0-9A-Za-z_-]{30,}/ },
+  { name: 'Anthropic API key (sk-ant-)', regex: /\bsk-ant-[A-Za-z0-9_-]{20,}/ },
 ];
 
 const LOCKFILE_BASENAMES = new Set([
@@ -86,6 +94,7 @@ function parseUnifiedDiff(rawDiff: string): FileDiffChunk[] {
   const chunks: FileDiffChunk[] = [];
   const lines = rawDiff.split('\n');
   let current: FileDiffChunk | null = null;
+  let inHunk = false;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -94,12 +103,10 @@ function parseUnifiedDiff(rawDiff: string): FileDiffChunk[] {
       if (current) {
         chunks.push(current);
       }
-      const match = line.match(/^diff --git a\/(.+) b\/(.+)$/);
-      const oldPath = match ? match[1] : '';
-      const newPath = match ? match[2] : '';
+      inHunk = false;
       current = {
-        oldPath,
-        newPath,
+        oldPath: '',
+        newPath: '',
         status: 'M',
         addedLines: [],
         deletedLines: [],
@@ -109,15 +116,20 @@ function parseUnifiedDiff(rawDiff: string): FileDiffChunk[] {
 
     if (!current) continue;
 
-    if (line.startsWith('new file mode ')) {
-      current.status = 'A';
-    } else if (line.startsWith('deleted file mode ')) {
-      current.status = 'D';
-    } else if (line.startsWith('similarity index ')) {
-      current.status = 'R';
-    } else if (line.startsWith('+++ ') || line.startsWith('--- ')) {
-      // Diff header lines, skip
+    if (!inHunk) {
+      if (line.startsWith('--- a/')) {
+        current.oldPath = line.slice(6);
+      } else if (line.startsWith('+++ b/')) {
+        current.newPath = line.slice(6);
+      } else if (line.startsWith('@@ ')) {
+        inHunk = true;
+      }
       continue;
+    }
+
+    // Inside a hunk
+    if (line.startsWith('@@ ')) {
+      inHunk = true;
     } else if (line.startsWith('+')) {
       current.addedLines.push(line.slice(1));
     } else if (line.startsWith('-')) {
@@ -165,33 +177,75 @@ export async function evaluateDiffPolicy(
       ? (workspaceOrRepo as Workspace).worktreePath
       : repoPath;
 
-  // 1. Get raw diff against baseBranch
-  const { stdout: rawDiff } = await runGit(workspaceOrRepo, ['diff', baseBranch]);
+  // New Check: Uncommitted changes in worktree (must never escape review)
+  try {
+    const { stdout: statusOut } = await runGit(workspaceOrRepo, ['status', '--porcelain']);
+    if (String(statusOut ?? '').trim().length > 0) {
+      violations.push(`Uncommitted changes in worktree:\n${String(statusOut).trim()}`);
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    violations.push(`Error checking worktree status: ${msg}`);
+  }
+
+  // 1. Get raw diff against baseBranch using --merge-base and HEAD
+  const { stdout: rawDiff } = await runGit(workspaceOrRepo, [
+    'diff',
+    '--merge-base',
+    baseBranch,
+    'HEAD',
+  ]);
   const chunks = parseUnifiedDiff(String(rawDiff ?? ''));
 
-  // 2. Get name-status list to accurately track deleted, added, modified files
-  const { stdout: nameStatusOut } = await runGit(workspaceOrRepo, ['diff', '--name-status', baseBranch]);
-  const nameStatusLines = String(nameStatusOut ?? '').trim().split('\n').filter(Boolean);
-
+  // 2. Get name-status -z list to accurately track deleted, added, renamed, modified files
+  const { stdout: nameStatusOut } = await runGit(workspaceOrRepo, [
+    'diff',
+    '--name-status',
+    '-z',
+    '--merge-base',
+    baseBranch,
+    'HEAD',
+  ]);
   const touchedFiles: Array<{ status: string; path: string; oldPath?: string }> = [];
-  for (const nsLine of nameStatusLines) {
-    const parts = nsLine.split('\t');
-    const statusCode = parts[0] ? parts[0][0] : 'M';
+  const parts = String(nameStatusOut ?? '').split('\0');
+  for (let i = 0; i < parts.length; i++) {
+    const rawStatus = parts[i]?.trim();
+    if (!rawStatus) continue;
+    const statusCode = rawStatus[0];
     if (statusCode === 'R' || statusCode === 'C') {
-      touchedFiles.push({ status: statusCode, oldPath: parts[1], path: parts[2] });
+      const oldPath = parts[++i];
+      const newPath = parts[++i];
+      if (oldPath && newPath) {
+        touchedFiles.push({ status: statusCode, oldPath, path: newPath });
+      }
     } else {
-      touchedFiles.push({ status: statusCode, path: parts[1] });
+      const p = parts[++i];
+      if (p) {
+        touchedFiles.push({ status: statusCode, path: p });
+      }
     }
   }
 
+  // 3. Get accurate insertion and deletion counts from git diff --numstat
+  const { stdout: numstatOut } = await runGit(workspaceOrRepo, [
+    'diff',
+    '--numstat',
+    '--merge-base',
+    baseBranch,
+    'HEAD',
+  ]);
   let totalInsertions = 0;
   let totalDeletions = 0;
-  let hasLockfileEdit = false;
-
-  for (const chunk of chunks) {
-    totalInsertions += chunk.addedLines.length;
-    totalDeletions += chunk.deletedLines.length;
+  for (const line of String(numstatOut ?? '').trim().split('\n')) {
+    if (!line.trim()) continue;
+    const [insStr, delStr] = line.split('\t');
+    const ins = parseInt(insStr, 10);
+    const del = parseInt(delStr, 10);
+    if (!isNaN(ins)) totalInsertions += ins;
+    if (!isNaN(del)) totalDeletions += del;
   }
+
+  let hasLockfileEdit = false;
 
   const diffStats: DiffStats = {
     insertions: totalInsertions,
@@ -211,11 +265,17 @@ export async function evaluateDiffPolicy(
   }
   diffStats.lockfileEdit = hasLockfileEdit;
 
-  // Rule 1: Deletes any test file
+  // Rule 1: Deletes any test file or renames a test file to a non-test file
   for (const tf of touchedFiles) {
     if (tf.status === 'D') {
       if (isTestFile(tf.path)) {
         violations.push(`Diff deletes test file: ${tf.path}`);
+      }
+    } else if (tf.status === 'R' || tf.status === 'C') {
+      if (tf.oldPath && isTestFile(tf.oldPath) && !isTestFile(tf.path)) {
+        violations.push(
+          `Diff renames test file to non-test file: ${tf.oldPath} -> ${tf.path}`
+        );
       }
     }
   }
@@ -228,35 +288,41 @@ export async function evaluateDiffPolicy(
   }
 
   // Rule 5: Touches .github/** or policy files without an approved ask
-  const approvedSet = new Set(options?.approvedAsks ?? []);
+  // Exact match or prefix match requiring trailing '/'
+  const approvedList = (options?.approvedAsks ?? []).filter(
+    (a): a is string => typeof a === 'string' && a.trim().length > 0
+  );
   for (const tf of touchedFiles) {
     if (isGithubPath(tf.path) || isPolicyFile(tf.path)) {
-      const isApproved =
-        approvedSet.has(tf.path) ||
-        Array.from(approvedSet).some((approved) => tf.path.startsWith(approved) || approved.includes(tf.path));
+      const isApproved = approvedList.some((approved) => {
+        if (tf.path === approved) return true;
+        if (approved.endsWith('/') && tf.path.startsWith(approved)) return true;
+        return false;
+      });
       if (!isApproved) {
         violations.push(`Diff touches protected file without an approved ask: ${tf.path}`);
       }
     }
   }
 
-  // Rule 6: Modifies the "scripts" field of any package.json
+  // Rule 6: Modifies the "scripts" field of any package.json (read HEAD:<path> via git show)
   for (const tf of touchedFiles) {
     if (path.basename(tf.path) === 'package.json') {
       try {
         let baseScripts: Record<string, unknown> = {};
         try {
-          const { stdout: basePkgJson } = await runGit(workspaceOrRepo, ['show', `${baseBranch}:${tf.path}`]);
+          const { stdout: basePkgJson } = await runGit(worktreePath, ['show', `${baseBranch}:${tf.path}`]);
           baseScripts = JSON.parse(String(basePkgJson ?? '')).scripts ?? {};
         } catch {
           // File did not exist on base branch
         }
 
         let currScripts: Record<string, unknown> = {};
-        const fullCurrPath = path.join(worktreePath, tf.path);
-        if (fs.existsSync(fullCurrPath)) {
-          const currPkgJson = fs.readFileSync(fullCurrPath, 'utf8');
-          currScripts = JSON.parse(currPkgJson).scripts ?? {};
+        try {
+          const { stdout: currPkgJson } = await runGit(worktreePath, ['show', `HEAD:${tf.path}`]);
+          currScripts = JSON.parse(String(currPkgJson ?? '')).scripts ?? {};
+        } catch {
+          // File does not exist on HEAD
         }
 
         if (JSON.stringify(baseScripts) !== JSON.stringify(currScripts)) {
@@ -286,13 +352,14 @@ export async function evaluateDiffPolicy(
 
   // Collect secret values if needed for Rule 10
   let secretValues: string[] = options?.secretValues ?? [];
-  if (secretValues.length === 0 && options?.collectSecrets !== false) {
+  if (secretValues.length === 0) {
     try {
       if (fs.existsSync(worktreePath)) {
         secretValues = await collectSecretValues(worktreePath);
       }
-    } catch {
-      // best-effort
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      violations.push(`Failed to collect secret values from worktree: ${msg}`);
     }
   }
   const effectiveSecrets = secretValues.filter((s) => typeof s === 'string' && s.length >= 8);
@@ -369,5 +436,6 @@ export async function evaluateDiffPolicy(
     violations,
     reviewItems,
     diffStats,
+    effectiveSecrets,
   };
 }

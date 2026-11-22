@@ -58,6 +58,11 @@ describe('add', () => {
       `import { defineConfig } from 'vitest/config';\nexport default defineConfig({});\n`
     );
 
+    fs.writeFileSync(
+      path.join(tempRepoDir, '.gitignore'),
+      `.env\nnode_modules\n`
+    );
+
     await runGit(tempRepoDir, ['add', '.']);
     await runGit(tempRepoDir, ['commit', '-m', 'Initial commit']);
   });
@@ -100,6 +105,27 @@ describe('add', () => {
       fs.writeFileSync(path.join(tempRepoDir, 'src', 'index.ts'), 'export function add(a: number, b: number) { return a + b + 0; }\n');
       await runGit(tempRepoDir, ['add', '-A']);
       await runGit(tempRepoDir, ['commit', '-m', 'Update src file']);
+
+      const result = await evaluateDiffPolicy(tempRepoDir, 'main');
+      expect(result.passed).toBe(true);
+      expect(result.violations).toHaveLength(0);
+    });
+
+    it('FAIL: when a test file is renamed to a non-test file', async () => {
+      await runGit(tempRepoDir, ['checkout', '-b', 'task-branch']);
+      fs.mkdirSync(path.join(tempRepoDir, 'src'), { recursive: true });
+      await runGit(tempRepoDir, ['mv', 'test/index.test.ts', 'src/calc.txt']);
+      await runGit(tempRepoDir, ['commit', '-m', 'Rename test file to txt']);
+
+      const result = await evaluateDiffPolicy(tempRepoDir, 'main');
+      expect(result.passed).toBe(false);
+      expect(result.violations.some((v) => v.includes('rename') || v.includes('test'))).toBe(true);
+    });
+
+    it('PASS (control): when a test file is renamed to another test file', async () => {
+      await runGit(tempRepoDir, ['checkout', '-b', 'task-branch']);
+      await runGit(tempRepoDir, ['mv', 'test/index.test.ts', 'test/index.spec.ts']);
+      await runGit(tempRepoDir, ['commit', '-m', 'Rename test to spec']);
 
       const result = await evaluateDiffPolicy(tempRepoDir, 'main');
       expect(result.passed).toBe(true);
@@ -272,6 +298,20 @@ describe('add', () => {
       });
       expect(result.passed).toBe(true);
       expect(result.violations).toHaveLength(0);
+    });
+
+    it('FAIL: approvedAsks containing empty string must NOT approve .github/workflows/ci.yml', async () => {
+      await runGit(tempRepoDir, ['checkout', '-b', 'task-branch']);
+      fs.mkdirSync(path.join(tempRepoDir, '.github', 'workflows'), { recursive: true });
+      fs.writeFileSync(path.join(tempRepoDir, '.github', 'workflows', 'ci.yml'), 'name: CI\n');
+      await runGit(tempRepoDir, ['add', '-A']);
+      await runGit(tempRepoDir, ['commit', '-m', 'Add CI workflow']);
+
+      const result = await evaluateDiffPolicy(tempRepoDir, 'main', {
+        approvedAsks: [''],
+      });
+      expect(result.passed).toBe(false);
+      expect(result.violations.some((v) => v.includes('.github'))).toBe(true);
     });
   });
 
@@ -475,6 +515,63 @@ describe('add', () => {
       const result = await evaluateDiffPolicy(tempRepoDir, 'main');
       expect(result.passed).toBe(true);
       expect(result.violations).toHaveLength(0);
+    });
+
+    it('FAIL: when diff contains tokens LONGER than minimum length for each secret shape', async () => {
+      const tokens = [
+        'ghp_0123456789abcdefghijklmnopqrstuvwxyzEXTRA', // 46 chars > 36
+        'github_pat_11AABCDEF0123456789_abcdefghijklmnopqrstuvwxyz0123456789EXTRACHARS', // > 36
+        'gho_0123456789abcdefghijklmnopqrstuvwxyzEXTRA', // 46 chars > 36
+        'ghs_0123456789abcdefghijklmnopqrstuvwxyzEXTRA', // 46 chars > 36
+        'ghu_0123456789abcdefghijklmnopqrstuvwxyzEXTRA', // 46 chars > 36
+        'ghr_0123456789abcdefghijklmnopqrstuvwxyzEXTRA', // 46 chars > 36
+        'glpat-0123456789abcdefghijEXTRATOKEN', // 36 chars > 20
+        'xoxb-1234567890-1234567890123-EXTRATOKEN', // > 10
+        'AIzaSyA0123456789abcdefghijklmnopqrstuvwxyEXTRA', // 48 chars > 35
+        'AKIAIOSFODNN7EXAMPLE20CHARS', // 27 chars > 16
+      ];
+
+      for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i];
+        await runGit(tempRepoDir, ['checkout', 'main']);
+        await runGit(tempRepoDir, ['checkout', '-b', `token-branch-${i}`]);
+        fs.appendFileSync(path.join(tempRepoDir, 'src', 'index.ts'), `// token: ${token}\n`);
+        await runGit(tempRepoDir, ['add', '-A']);
+        await runGit(tempRepoDir, ['commit', '-m', `Add token ${i}`]);
+
+        const result = await evaluateDiffPolicy(tempRepoDir, 'main');
+        expect(result.passed).toBe(false);
+        expect(result.violations.some((v) => v.includes('secret shape'))).toBe(true);
+      }
+    });
+  });
+
+  // Diff Parser and Worktree Status tests
+  describe('Diff Parser & Working Tree Status', () => {
+    it('DIFF PARSER: a diff removing a line that begins with "-- " is counted in deletions', async () => {
+      // Add a line starting with '-- '
+      fs.appendFileSync(path.join(tempRepoDir, 'src', 'index.ts'), '-- this is a SQL or comment line\n');
+      await runGit(tempRepoDir, ['add', '-A']);
+      await runGit(tempRepoDir, ['commit', '-m', 'Add line starting with -- ']);
+
+      // Now on task branch, remove that line
+      await runGit(tempRepoDir, ['checkout', '-b', 'task-branch-dash']);
+      const content = fs.readFileSync(path.join(tempRepoDir, 'src', 'index.ts'), 'utf8');
+      fs.writeFileSync(path.join(tempRepoDir, 'src', 'index.ts'), content.replace('-- this is a SQL or comment line\n', ''));
+      await runGit(tempRepoDir, ['add', '-A']);
+      await runGit(tempRepoDir, ['commit', '-m', 'Remove line starting with -- ']);
+
+      const result = await evaluateDiffPolicy(tempRepoDir, 'main');
+      expect(result.diffStats.deletions).toBe(1);
+    });
+
+    it('FAIL: when git status --porcelain is non-empty (uncommitted changes in worktree)', async () => {
+      await runGit(tempRepoDir, ['checkout', '-b', 'task-branch-uncommitted']);
+      fs.appendFileSync(path.join(tempRepoDir, 'src', 'index.ts'), '// uncommitted work\n');
+
+      const result = await evaluateDiffPolicy(tempRepoDir, 'main');
+      expect(result.passed).toBe(false);
+      expect(result.violations.some((v) => v.toLowerCase().includes('uncommitted'))).toBe(true);
     });
   });
 

@@ -38,4 +38,15 @@ describe('Worktree Size Checks', () => {
     expect(result.passed).toBe(true);
     expect(result.sizeBytes).toBeLessThan(100 * 1024);
   });
+
+  it('FAIL: oversized content inside .git fails (does not exclude .git)', async () => {
+    const gitDir = path.join(tempDir, '.git');
+    fs.mkdirSync(gitDir, { recursive: true });
+    const buffer = Buffer.alloc(200 * 1024, 'g');
+    fs.writeFileSync(path.join(gitDir, 'large-blob.pack'), buffer);
+
+    const result = await checkWorktreeSize(tempDir, 100 * 1024);
+    expect(result.passed).toBe(false);
+    expect(result.sizeBytes).toBeGreaterThanOrEqual(200 * 1024);
+  });
 });

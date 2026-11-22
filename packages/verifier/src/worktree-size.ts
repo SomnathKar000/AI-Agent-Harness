@@ -12,8 +12,12 @@ export async function checkWorktreeSize(
   maxBytes: number = DEFAULT_MAX_WORKTREE_BYTES
 ): Promise<{ passed: boolean; sizeBytes: number; limitBytes: number }> {
   let totalBytes = 0;
+  let exceeded = false;
 
   async function walk(currentPath: string): Promise<void> {
+    if (exceeded) {
+      return;
+    }
     let entries: fs.Dirent[];
     try {
       entries = await fs.promises.readdir(currentPath, { withFileTypes: true });
@@ -22,8 +26,8 @@ export async function checkWorktreeSize(
     }
 
     for (const entry of entries) {
-      if (entry.name === '.git') {
-        continue;
+      if (exceeded) {
+        return;
       }
       const fullPath = path.join(currentPath, entry.name);
       try {
@@ -32,6 +36,10 @@ export async function checkWorktreeSize(
           await walk(fullPath);
         } else if (stats.isFile()) {
           totalBytes += stats.size;
+          if (totalBytes > maxBytes) {
+            exceeded = true;
+            return;
+          }
         }
       } catch {
         // Skip inaccessible entries
@@ -42,7 +50,7 @@ export async function checkWorktreeSize(
   await walk(worktreePath);
 
   return {
-    passed: totalBytes <= maxBytes,
+    passed: !exceeded && totalBytes <= maxBytes,
     sizeBytes: totalBytes,
     limitBytes: maxBytes,
   };
