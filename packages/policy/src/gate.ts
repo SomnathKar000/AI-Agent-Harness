@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { maskSecrets as maskSecretsCore, maskAndTruncate } from '@harness/core';
 import type { PolicyGate as AgentPolicyGate, PolicyDecision, ToolCall } from '@harness/agent';
 import { createApproval, appendAudit, type Database } from '@harness/db';
 import { loadPolicy } from './loader.js';
@@ -35,24 +36,12 @@ export class PolicyGate implements AgentPolicyGate {
   }
 
   maskSecrets(text: string): string {
-    if (!text || this.secretValues.length === 0) return text;
-    let result = text;
-    for (const secret of this.secretValues) {
-      if (secret && secret.length >= 8) {
-        result = result.replaceAll(secret, '[REDACTED]');
-      }
-    }
-    return result;
+    return maskSecretsCore(text, this.secretValues);
   }
 
   private sanitizeValue(val: unknown): unknown {
     if (typeof val === 'string') {
-      let masked = this.maskSecrets(val);
-      if (masked.length > 2048) {
-        const truncatedBytes = Buffer.byteLength(masked.slice(2048));
-        masked = masked.slice(0, 2048) + ` [truncated ${truncatedBytes} bytes]`;
-      }
-      return masked;
+      return maskAndTruncate(val, this.secretValues);
     }
     if (Array.isArray(val)) {
       return val.map((item) => this.sanitizeValue(item));

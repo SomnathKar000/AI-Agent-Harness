@@ -772,8 +772,13 @@ describe('calc', () => {
     const stored = await db.select().from(verifications).where(eq(verifications.taskId, taskId));
     const diffCheckRow = stored.find((s) => s.check === 'diff_policy');
     expect(diffCheckRow).toBeDefined();
-    expect(diffCheckRow?.output).toContain('[REDACTED]');
+    // Round 3, item 5: violations no longer echo the offending source line, so there is
+    // nothing in this row left to redact. The row must name the rule and the line instead,
+    // and must still never carry the secret. (Masking itself is proven by the container
+    // output test below, where raw text legitimately reaches the row.)
     expect(diffCheckRow?.output).not.toContain(SECRET_LEAK);
+    expect(diffCheckRow?.output).toContain('secret_value_in_diff');
+    expect(diffCheckRow?.output).toMatch(/line \d+/);
   });
 
   // Item 8: Remove collectSecrets escape hatch & fail on collection rejection

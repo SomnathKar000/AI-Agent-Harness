@@ -37,6 +37,12 @@ const WORKTREE_SCOPED_COMMANDS = new Set([
   'reset',
   'checkout',
   'restore',
+  // 'show' and 'merge-base' resolve revisions (HEAD, <merge-base>:<path>) that only mean the
+  // right thing in the task's worktree. Scoping them here keeps cwd = main repo with an
+  // explicit --git-dir/--work-tree, instead of callers passing the worktree path as a string
+  // and running git inside untrusted content.
+  'show',
+  'merge-base',
 ]);
 
 /**

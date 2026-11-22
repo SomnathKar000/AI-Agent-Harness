@@ -70,5 +70,10 @@
       "Bash(curl*)",
       "Bash(wget*)"
     ]
+  },
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
   }
 }
