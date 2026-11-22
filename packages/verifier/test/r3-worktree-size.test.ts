@@ -38,11 +38,15 @@ describe('Worktree size round 3', () => {
     expect(result.limitBytes).toBe(40 * 1024);
   });
 
-  it('stops walking as soon as the limit is exceeded: entriesVisited stays far below the tree size', async () => {
-    // One oversized file first, then 400 more entries that must never be visited.
-    fs.writeFileSync(path.join(tempDir, '0000-big.bin'), Buffer.alloc(64 * 1024, 'b'));
-    for (let i = 1; i <= 400; i++) {
-      fs.writeFileSync(path.join(tempDir, `${String(i).padStart(4, '0')}-tiny.txt`), 'x');
+  it('stops walking as soon as the limit is exceeded: entriesVisited stays far below the tree size', { timeout: 30000 }, async () => {
+    // Every file is 16KB against a 32KB limit, so the walk must stop by the third entry
+    // NO MATTER WHAT ORDER readdir returns. The earlier version of this test put one big
+    // file first and 400 tiny ones after it, which assumed readdir sorts by name — not
+    // guaranteed — and spent >5s on 401 synchronous writes, so it timed out under load.
+    const FILES = 200;
+    const payload = Buffer.alloc(16 * 1024, 'b');
+    for (let i = 0; i < FILES; i++) {
+      fs.writeFileSync(path.join(tempDir, `${String(i).padStart(4, '0')}.bin`), payload);
     }
 
     const visited: string[] = [];
@@ -53,9 +57,9 @@ describe('Worktree size round 3', () => {
     expect(result.passed).toBe(false);
     expect(result.earlyExit).toBe(true);
     expect(result.entriesVisited).toBe(visited.length);
-    // readdir returns sorted names, so the oversized file is the first entry and the walk
-    // must stop right there rather than stat'ing all 401.
-    expect(result.entriesVisited).toBeLessThan(10);
+    // Three 16KB files exceed 32KB, so the walk stops there and never stats the rest.
+    expect(result.entriesVisited).toBeLessThanOrEqual(5);
+    expect(result.entriesVisited).toBeLessThan(FILES);
   });
 
   it('a tree under the limit is walked in full and reports no early exit', async () => {

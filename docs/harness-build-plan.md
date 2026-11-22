@@ -15,7 +15,7 @@
 | 2     | DB + state machine + least-privilege role     | ✅ Done (apply the Phase 2 follow-ups below)                              |
 | 3     | Agent loop + tools                            | ✅ Done and committed (prices still placeholders)                         |
 | 4     | Permission engine + audit + secret masking    | ✅ **Signed off** at `88b89a1` (rounds 5–8)                               |
-| 5     | Verifier + diff policy                        | 🔄 Round 1 committed (`ab89e07`), NOT signed off: 12 findings, 3 blocking |
+| 5     | Verifier + diff policy                        | ⏳ Rounds 1–4 done (`6d5843d`), all 12 findings closed, awaiting sign-off  |
 | 6     | API + queue + parallel workers                | ⏳                                                                        |
 | 7     | CLI + approval flow                           | ⏳                                                                        |
 | 8     | GitHub PRs                                    | ⏳                                                                        |
@@ -24,6 +24,10 @@
 
 **Verified test counts at `ab89e07`:** policy 129 in 14 files, sandbox 28 in 7, agent 34 in 6,
 core 9, db 8, verifier 37 in 4 — 245 total.
+
+**Verified test counts at `6d5843d` (Phase 5 round 4):** policy 129 in 14 files, sandbox 44 in 10,
+agent 34 in 6, core 9, db 8, verifier 88 in 11 — **312 total**, `ALL_TESTS_EXIT=0`, with three
+consecutive cleanup blocks empty and no hand-cleaning (`reports/r4-*`).
 
 ---
 
@@ -163,11 +167,24 @@ Delete lines 453–460 (the round 5 checklist) entirely. Keep the original Phase
 
 7. Lines 541–598 — Phase 5 section
 
-# PHASE 5: Verifier (REVIEW) 🔄
+# PHASE 5: Verifier (REVIEW) ⏳
 
-**Status:** Round 1 committed as `ab89e07` ("Phase 5: verifier"). **Not signed off.**
-`packages/verifier` with 37 tests in 4 files; monorepo 245 green; scope clean (only
-`packages/verifier/**` and `pnpm-lock.yaml`).
+**Status:** rounds 1–4 committed. **Awaiting reviewer sign-off** — the implementer does not grade
+its own work.
+
+| Round | Commit | What |
+| ----- | --------- | ----------------------------------------------------------------- |
+| 1     | `ab89e07` | `packages/verifier`, 37 tests in 4 files. 12 findings, 3 blocking.  |
+| 2     | `3f5fa2f` | Closed 10 of the 12 findings; 53 tests in 4 files.                  |
+| 3     | `c8ee8c3` | Stricter bar on the rest + the two partials; 84 tests in 9 files.   |
+| 4     | `6d5843d` | `runGit` subcommand scoping, masked DB errors, `diff_parse_unresolved`; 88 tests in 11 files. |
+
+Round 2 was audited rather than taken on trust (`reports/phase5-round2-audit.md`): 10 of 12
+findings were already fixed and proven, 2 partial. Rounds 3 and 4 closed those and met the
+stricter requirements the review items added.
+
+**All 12 round-1 findings are closed and proven.** Evidence lives in `reports/`: a red file per
+item, a green run, and the per-package cleanup hunt.
 
 **What round 1 got right**
 
@@ -177,7 +194,27 @@ Delete lines 453–460 (the round 5 checklist) entirely. Keep the original Phase
 - `guard.test.ts` enforces no raw git in the package; zero `child_process`/`execa` imports.
 - No Phase 4 regression; tests assert their own worktree and branch cleanup.
 
-**Round 1 findings (3 blocking, 12 total)**
+**Two findings produced by the review itself (both now fixed)**
+
+- **F1 — `runGit` lost worktree scoping on any `-c key=value` argument.** It located the
+  subcommand with `args.find((a) => !a.startsWith('-'))`, so the *value* of a `-c` pair was read
+  as the subcommand, nothing matched `WORKTREE_SCOPED_COMMANDS`, no `--git-dir`/`--work-tree` was
+  injected, and the command **diffed the main repo with exit code 0** — the Phase 1 containment
+  guarantee failing silently. Found when the diff policy returned zero violations for a worktree
+  that plainly had them. Fixed in round 4: `findSubcommand()` skips global options and their
+  values and **throws** on an unknown subcommand rather than falling through to an unscoped run.
+- **F2 — the first fix for the worktree leak was inert.** `hookTimeout` was set in
+  `describe(name, options, fn)`, where vitest honours `timeout` but not `hookTimeout`. Two clean
+  sandbox runs made it look fixed; that was lighter load. The real fix is `hookTimeout` in
+  `vitest.config.ts`. Measured teardown is 2800–6216 ms for the container plus 149–505 ms for the
+  worktree, so the old 10 s default sat just above a real 3–7 s cost — which is why the failures
+  looked random and moved between tests. Set to 30 s (~4.5× headroom); 120 s would mask a genuine
+  hang for two minutes.
+
+Both are the reason the standard is now explicit: **a green that cannot distinguish "fixed" from
+"got lucky" is not evidence.**
+
+**Round 1 findings (3 blocking, 12 total) — all closed**
 
 1. **Blocking — the cleanup proof was hand-cleaned.** The report claimed "Pruning Nothing In
    Between" while its action log showed a container sweep, a fixture reset and three
@@ -250,8 +287,11 @@ verifyTask(task, sandbox):
 
 **Newest (Nov 22)**
 
-- [ ] Phase 5 round 2: the 12 findings above
-- [ ] Diagnose what leaves directories in `~/.harness/worktrees` after a full test run
+- [x] Phase 5 round 2: the 12 findings above — all closed across rounds 2–4, last at `6d5843d`
+- [x] Diagnose what leaves directories in `~/.harness/worktrees` after a full test run — the
+      `afterEach` teardown in `packages/sandbox/test/sandbox.test.ts` exceeded vitest's 10s default
+      `hookTimeout` and died mid-loop, leaving the worktree of whichever test had just run. Fixed
+      in `vitest.config.ts` (see F2). Two consecutive full runs now leave nothing.
 - [ ] User runs the verification commands in their own terminal, every round
 - [ ] `config/prices.json` real prices (still zeros, `maxCostUsd` is inert)
 - [ ] Phase 6: wire `collectSecretValues(worktreePath)` into the worker's `PolicyGate` —
