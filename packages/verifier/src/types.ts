@@ -81,4 +81,9 @@ export interface DiffPolicyResult {
   secretScanRan: boolean;
   /** Lines the parser accounted for; compared against --numstat in tests. */
   parsedLineCounts: { added: number; removed: number };
+  /**
+   * Diff chunks whose file could not be resolved from the header plus the --name-status
+   * list. Non-empty means the policy refused to guess, and the run fails.
+   */
+  unresolvedChunks: string[];
 }

@@ -90,6 +90,62 @@ function isGithubPath(filePath: string): boolean {
   return norm.startsWith('.github/') || norm.includes('/.github/');
 }
 
+/**
+ * git writes `+++ b/some path\t` when the path contains a space. The tab is a separator,
+ * not part of the name, and leaving it on makes every lookup of that path miss.
+ */
+function stripTrailingTab(value: string): string {
+  const tab = value.indexOf('\t');
+  return tab === -1 ? value : value.slice(0, tab);
+}
+
+/**
+ * Patch headers C-quote a path that contains non-ASCII or control characters:
+ * `--- "a/test/caf\303\251.test.ts"`. `--name-status -z` does not, so the two must be
+ * reconciled or every non-ASCII path fails to match and looks unresolved.
+ */
+function unquoteGitPath(value: string): string {
+  if (value.length < 2 || !value.startsWith('"') || !value.endsWith('"')) return value;
+  const inner = value.slice(1, -1);
+  const bytes: number[] = [];
+  const simple: Record<string, number> = {
+    a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, '\\': 92,
+  };
+
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch !== '\\') {
+      for (const b of Buffer.from(ch, 'utf8')) bytes.push(b);
+      continue;
+    }
+    const next = inner[++i];
+    if (next === undefined) break;
+    if (next >= '0' && next <= '7') {
+      bytes.push(parseInt(inner.slice(i, i + 3), 8));
+      i += 2;
+    } else {
+      bytes.push(simple[next] ?? next.charCodeAt(0));
+    }
+  }
+  return Buffer.from(bytes).toString('utf8');
+}
+
+/**
+ * Reads one path out of a patch header line, handling the quoted form, the trailing tab,
+ * and the a//b/ prefix. Returns '' for /dev/null.
+ */
+function headerPathAfter(line: string, prefixLength: number, sidePrefix?: 'a/' | 'b/'): string {
+  let rest = line.slice(prefixLength);
+  if (rest.startsWith('"')) {
+    const closing = rest.lastIndexOf('"');
+    rest = unquoteGitPath(rest.slice(0, closing + 1));
+  } else {
+    rest = stripTrailingTab(rest);
+  }
+  if (sidePrefix && rest.startsWith(sidePrefix)) rest = rest.slice(sidePrefix.length);
+  return rest === '/dev/null' ? '' : rest;
+}
+
 export interface DiffLine {
   /** Line number in the new file for added lines, in the old file for removed lines. */
   line: number;
@@ -143,12 +199,25 @@ export function parseUnifiedDiff(rawDiff: string): FileDiffChunk[] {
     }
 
     if (!inHunk) {
-      // File header territory. With core.quotePath=false these two lines carry one
-      // unambiguous path each (or /dev/null), unlike the combined "diff --git a/X b/Y" line.
-      if (line.startsWith('--- a/')) {
-        current.oldPath = line.slice(6);
-      } else if (line.startsWith('+++ b/')) {
-        current.newPath = line.slice(6);
+      // File header territory. Each of these lines carries ONE unambiguous path, unlike the
+      // combined "diff --git a/X b/Y" line, which cannot be split when a path contains
+      // " b/". git appends a TAB after the path when it contains a space, so cut at the tab.
+      if (line.startsWith('--- ')) {
+        current.oldPath = headerPathAfter(line, 4, 'a/');
+      } else if (line.startsWith('+++ ')) {
+        current.newPath = headerPathAfter(line, 4, 'b/');
+      } else if (line.startsWith('rename from ')) {
+        current.oldPath = headerPathAfter(line, 'rename from '.length);
+        current.status = 'R';
+      } else if (line.startsWith('rename to ')) {
+        current.newPath = headerPathAfter(line, 'rename to '.length);
+        current.status = 'R';
+      } else if (line.startsWith('copy from ')) {
+        current.oldPath = headerPathAfter(line, 'copy from '.length);
+        current.status = 'C';
+      } else if (line.startsWith('copy to ')) {
+        current.newPath = headerPathAfter(line, 'copy to '.length);
+        current.status = 'C';
       }
       continue;
     }
@@ -219,6 +288,7 @@ export async function evaluateDiffPolicy(
       worktreeClean: false,
       secretScanRan: false,
       parsedLineCounts: { added: 0, removed: 0 },
+      unresolvedChunks: [],
     };
   }
 
@@ -283,6 +353,7 @@ export async function evaluateDiffPolicy(
       worktreeClean,
       secretScanRan: false,
       parsedLineCounts: { added: 0, removed: 0 },
+      unresolvedChunks: [],
     };
   }
 
@@ -501,16 +572,32 @@ export async function evaluateDiffPolicy(
   let testDeletedAssertions = 0;
 
   const byPath = new Map(touchedFiles.map((tf) => [tf.path, tf]));
+  const unresolvedChunks: string[] = [];
 
   for (let c = 0; c < chunks.length; c++) {
     const chunk = chunks[c];
-    // Prefer the path from the file header; fall back to positional order only if the
-    // header was absent (a pure mode change, for instance).
+    // The path must come from the chunk's own header and must match a --name-status entry.
+    // There is no positional fallback: matching chunk N to touchedFiles[N] is a guess, and
+    // a guess here silently applies the test-file rules to the wrong file. A pure mode
+    // change has a "diff --git" header with no ---/+++ lines and lands in exactly this
+    // branch, which is why it fails closed instead.
     const headerPath = normalizePath(chunk.newPath || chunk.oldPath || '');
-    const tf = byPath.get(headerPath) ?? touchedFiles[c];
+    const tf = headerPath ? byPath.get(headerPath) : undefined;
+
+    if (!tf) {
+      const describe = headerPath ? `path ${headerPath}` : 'no path in its header';
+      unresolvedChunks.push(`chunk #${c + 1} (${describe})`);
+      add({
+        rule: 'diff_parse_unresolved',
+        detail: `could not resolve diff chunk #${c + 1} to a changed file (${describe}); refusing to guess`,
+        path: headerPath || undefined,
+      });
+      continue;
+    }
+
     // Prefer the name-status path: it is verbatim, while a patch header can be escaped.
-    const chunkPath = tf?.path || headerPath || '(unknown)';
-    const isTest = isTestFile(chunkPath) || (tf?.oldPath ? isTestFile(tf.oldPath) : false);
+    const chunkPath = tf.path;
+    const isTest = isTestFile(chunkPath) || (tf.oldPath ? isTestFile(tf.oldPath) : false);
 
     if (isTest) {
       testAddedAssertions += countAssertionCalls(chunk.addedLines);
@@ -588,5 +675,6 @@ export async function evaluateDiffPolicy(
     worktreeClean,
     secretScanRan,
     parsedLineCounts,
+    unresolvedChunks,
   };
 }

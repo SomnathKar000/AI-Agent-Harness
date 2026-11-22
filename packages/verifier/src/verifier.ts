@@ -189,6 +189,17 @@ export async function verifyTask(
         'Secret scan did not run',
   });
 
+  // An unresolved chunk is its own named failure: the policy could not tell which file a
+  // piece of the diff belonged to, so no per-line rule ran for it.
+  if (diffPolicyResult.unresolvedChunks.length > 0) {
+    allChecks.push({
+      name: 'diff_parse_unresolved',
+      passed: false,
+      rule: 'diff_parse_unresolved',
+      output: `Could not resolve ${diffPolicyResult.unresolvedChunks.length} diff chunk(s) to a changed file:\n${diffPolicyResult.unresolvedChunks.join('\n')}`,
+    });
+  }
+
   // diff_policy still reports every violation, including the dirty worktree and a failed
   // secret scan. The two checks above are an addition, not a reassignment: a reviewer reading
   // diff_policy alone must not miss them.
@@ -228,7 +239,14 @@ export async function verifyTask(
               : maskAndTruncate(String(check.output), diffPolicyResult.effectiveSecrets),
         });
       } catch (dbErr) {
-        console.error(`Failed to record verification in DB for ${check.name}:`, dbErr);
+        // A driver puts the offending parameter values into its error message, so this log
+        // goes through the same mask-then-truncate as everything else. It is a string, not
+        // the Error object: passing the object would print the unmasked message anyway.
+        const reason = dbErr instanceof Error ? dbErr.message : String(dbErr);
+        console.error(
+          `Failed to record verification in DB for ${check.name}: ` +
+            maskAndTruncate(reason, diffPolicyResult.effectiveSecrets)
+        );
       }
     }
   }
