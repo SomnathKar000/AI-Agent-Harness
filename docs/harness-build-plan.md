@@ -16,7 +16,7 @@
 | 3     | Agent loop + tools                            | ✅ Done and committed (prices still placeholders)                         |
 | 4     | Permission engine + audit + secret masking    | ✅ **Signed off** at `88b89a1` (rounds 5–8)                               |
 | 5     | Verifier + diff policy                        | ⏳ Rounds 1–4 done (`6d5843d`), all 12 findings closed, awaiting sign-off  |
-| 6     | API + queue + parallel workers                | ⏳                                                                        |
+| 6     | API + queue + parallel workers                | ⏳ Done at `d032de4`, 478 tests green, awaiting sign-off                  |
 | 7     | CLI + approval flow                           | ⏳                                                                        |
 | 8     | GitHub PRs                                    | ⏳                                                                        |
 | 9     | Hardening + evals                             | ⏳                                                                        |
@@ -24,6 +24,24 @@
 
 **Verified test counts at `ab89e07`:** policy 129 in 14 files, sandbox 28 in 7, agent 34 in 6,
 core 9, db 8, verifier 37 in 4 — 245 total.
+
+**Verified test counts after Phase 6 (Nov 27, 2026), code at `d032de4`:** core 9 in 1 file,
+db 8 in 1, agent 34 in 6, policy 129 in 14, sandbox 44 in 10, verifier 88 in 11, worker 74 in 11,
+api 92 in 9 — **478 total**, every package `EXIT=0` (`reports/seq-tests.txt`). Phase 5's 312 are
+reproduced exactly, so Phase 6 added 166 and changed none.
+
+Run **package-by-package, not as a single `pnpm -r test`**: two attempts at the recursive run were
+stopped externally (once by the user, once by Claude Code under host memory pressure), so the
+sequential form is what the evidence shows. The cleanup block ran straight after the last package
+with nothing in between (`reports/cleanup.txt`), and again after a repeat policy + sandbox run
+(`reports/cleanup-2.txt`); both are empty — no containers, no stray worktrees, no `harness/*`
+branches. Typecheck clean (`reports/typecheck.txt`, `TYPECHECK_EXIT=0`). Failing-first evidence:
+`reports/p6-worker-red.txt`, `reports/p6-reconcile-red.txt`, `reports/p6-api-red.txt`
+(all `RED_EXIT=1`). Test-file counts grew by additions only (`reports/it-count-diff.txt`).
+
+Known open: `pnpm -r lint` exits 1 on a **pre-existing** `@typescript-eslint/no-explicit-any` at
+`packages/core/src/mask.ts:43` (`reports/lint.txt`). Predates Phase 6 — confirmed by stashing the
+Phase 6 changes and re-running. Not fixed here: `core` is signed off and it is out of phase scope.
 
 **Verified test counts at `6d5843d` (Phase 5 round 4):** policy 129 in 14 files, sandbox 44 in 10,
 agent 34 in 6, core 9, db 8, verifier 88 in 11 — **312 total**, `ALL_TESTS_EXIT=0`, with three
@@ -294,7 +312,10 @@ verifyTask(task, sandbox):
       in `vitest.config.ts` (see F2). Two consecutive full runs now leave nothing.
 - [ ] User runs the verification commands in their own terminal, every round
 - [ ] `config/prices.json` real prices (still zeros, `maxCostUsd` is inert)
-- [ ] Phase 6: wire `collectSecretValues(worktreePath)` into the worker's `PolicyGate` —
+- [x] Phase 6: wire `collectSecretValues(worktreePath)` into the worker's `PolicyGate` —
+      done in `packages/worker/src/pipeline.ts` (via `defaultCreateGate` in `src/ports.ts`);
+      proving test `packages/worker/test/secret-wiring.test.ts` (red: `reports/p6-worker-red.txt`,
+      green: `reports/p6-worker-green.txt`). Original text:
       contract test is `packages/sandbox/test/e2e-canary.test.ts`, documented under
       "Wiring Not Done Yet" in `packages/policy/README.md`
 - [ ] Phase 6: strip or `skip-worktree` tracked secret files in worktrees; network allowlist
@@ -313,8 +334,8 @@ verifyTask(task, sandbox):
 - [ ] Phase 1: extend the guard test (`spawn`, `exec`, `child_process`) and confirm the hook test asserts a marker file is not created
 - [ ] Phase 3: dedicated Anthropic key with a spend cap
 - [x] Phase 4: real policy replaces `AllowAllGate` in the demo — done, `scripts/agent-demo.ts:183,191`
-- [ ] Phase 6: max 2 verify-fix loops enforced in the worker; retry increments `attempt`
-- [ ] Add the "no raw git" guard to worker, github and api packages (verifier: done)
+- [x] Phase 6: max 2 verify-fix loops enforced in the worker (`maxVerifyFixLoops`, default 2, `packages/worker/test/pipeline-verify-loop.test.ts`); retry increments `attempt` (`POST /tasks/:id/retry`, `packages/api/test/tasks.test.ts`)
+- [~] Add the "no raw git" guard to worker, github and api packages — worker and api done (`packages/worker/test/guard.test.ts`, `packages/api/test/guard.test.ts`); **github still has no guard** (verifier: done)
 - [ ] `.env` untracked, `.env.example` has empty secret values
 
 ---

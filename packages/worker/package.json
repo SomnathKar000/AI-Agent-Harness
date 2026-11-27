@@ -9,5 +9,20 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "lint": "eslint ."
+  },
+  "dependencies": {
+    "@harness/agent": "workspace:*",
+    "@harness/core": "workspace:*",
+    "@harness/db": "workspace:*",
+    "@harness/policy": "workspace:*",
+    "@harness/sandbox": "workspace:*",
+    "@harness/verifier": "workspace:*",
+    "bullmq": "^6.7.8",
+    "ioredis": "^6.0.0",
+    "pino": "^10.4.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "postgres": "^4.1.1"
   }
 }

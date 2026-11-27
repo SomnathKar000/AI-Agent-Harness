@@ -40,5 +40,13 @@ The Phase 5 verifier must reject task results if the diff contains:
 - **KNOWN LIMITATION: Separator-Split Secrets**: Separator-split secrets (e.g. an attacker script reading a secret and printing it character-by-character or split by separators such as `c-a-n-a-r-y`) or encoded/transformed variants are not matched by exact substring replacement and will NOT be masked.
 - **Keep Real Secrets Out of the Worktree**: While container network isolation (`NetworkMode: none`) blocks exfiltration channels, real secrets must never be placed inside the worktree repository. Use placeholder test fixtures only.
 
-## Wiring Not Done Yet
-The `PolicyGate` must be constructed with `secretValues` collected from `collectSecretValues(worktreePath)` in `@harness/sandbox`. Currently, no production worker or orchestration code performs this wiring (it exists only in test suites and `scripts/agent-demo.ts`). Wiring `collectSecretValues` into the task execution lifecycle and passing the collected secrets into `PolicyGate` is the contract that Phase 6 (`@harness/worker`) must satisfy, as tested end-to-end in `packages/sandbox/test/e2e-canary.test.ts`.
+## Wiring (done in Phase 6)
+The `PolicyGate` must be constructed with `secretValues` collected from `collectSecretValues(worktreePath)` in `@harness/sandbox`.
+
+That wiring now lives in `packages/worker`: `runTaskPipeline` calls `collectSecretValues(workspace.worktreePath)` after the container starts and passes the result to `defaultCreateGate`, which builds the real `PolicyGate` (`packages/worker/src/pipeline.ts`, `packages/worker/src/ports.ts`).
+
+A failure to collect fails the task. The agent is never run behind a gate with an empty secret registry, because an empty registry masks nothing (hard rule 13).
+
+Proven by:
+- `packages/worker/test/secret-wiring.test.ts` — the call happens once with the worktree path, the exact array reaches the gate, `defaultCreateGate` returns a real `PolicyGate` whose `maskSecrets` covers those values, and a collection failure fails the task without running the agent.
+- `packages/sandbox/test/e2e-canary.test.ts` — the end-to-end contract: a canary in the worktree never reaches the model, `task_steps`, `audit_log` or `approvals`.

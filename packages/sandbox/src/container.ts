@@ -243,3 +243,32 @@ export async function exec(
     timedOut,
   };
 }
+
+/**
+ * Lists every container created from the sandbox image, running or not.
+ *
+ * Added for the Phase 6 worker's startup reconciliation: after a crash the only way to find
+ * leftover containers is to ask Docker, and the worker must not open its own Docker client
+ * (hard rule 1 keeps container access inside this package). Filtering by
+ * `ancestor=harness-sandbox:latest` rather than a name prefix matters — a name filter of
+ * "harness" also matches the postgres and redis containers.
+ */
+export const SANDBOX_IMAGE = 'harness-sandbox:latest';
+
+export interface SandboxContainerSummary {
+  id: string;
+  state: string;
+  names: string[];
+}
+
+export async function listSandboxContainers(): Promise<SandboxContainerSummary[]> {
+  const containers = await docker.listContainers({
+    all: true,
+    filters: { ancestor: [SANDBOX_IMAGE] },
+  });
+  return containers.map((c) => ({
+    id: c.Id,
+    state: c.State,
+    names: c.Names ?? [],
+  }));
+}
