@@ -2,7 +2,7 @@
 
 1. Line 1 — title
 
-# AI Agent Harness: Phased Build Plan (v4, updated Nov 22, 2026)
+# AI Agent Harness: Phased Build Plan (v4, updated Nov 28, 2026)
 
 ---
 
@@ -17,7 +17,7 @@
 | 4     | Permission engine + audit + secret masking    | ✅ **Signed off** at `88b89a1` (rounds 5–8)                               |
 | 5     | Verifier + diff policy                        | ⏳ Rounds 1–4 done (`6d5843d`), all 12 findings closed, awaiting sign-off  |
 | 6     | API + queue + parallel workers                | ⏳ Done at `5de874b`, 478 tests green, awaiting sign-off                  |
-| 7     | CLI + approval flow                           | ⏳ Done, 532 tests green, awaiting sign-off                               |
+| 7     | CLI + approval flow                           | ⏳ Done at `8b8e20d`, 532 tests green, awaiting sign-off                   |
 | 8     | GitHub PRs                                    | ⏳                                                                        |
 | 9     | Hardening + evals                             | ⏳                                                                        |
 | 10    | Dashboard + productization                    | Later                                                                     |
@@ -25,12 +25,16 @@
 **Verified test counts at `ab89e07`:** policy 129 in 14 files, sandbox 28 in 7, agent 34 in 6,
 core 9, db 8, verifier 37 in 4 — 245 total.
 
-**Verified test counts after Phase 7 (Nov 28, 2026):** core 9 in 1 file, db 8 in 1,
+**Verified test counts after Phase 7 (Nov 28, 2026), code at `8b8e20d`:** core 9 in 1 file, db 8 in 1,
 agent 41 in 7, policy 129 in 14, cli 36 in 6, sandbox 44 in 10, verifier 88 in 11,
 worker 85 in 13, api 92 in 9 — **532 total**, every package `EXIT=0`
 (`reports/p7-seq-tests.txt`). Phase 6's 478 are reproduced exactly, so Phase 7 added 54
 and changed none; the only count to move was `reconcile.test.ts` 11 -> 13, an addition
-(`reports/p7-it-count-diff.txt`). Cleanup block ran straight after the last package and is
+(`reports/p7-it-count-diff.txt`). Note `docs/test-baseline.txt` and `reports/p7-it-count.txt`
+both total **465 static `it(` calls across 72 files**, not 532: `it.each` / `describe.each`
+expand at runtime. The two numbers measure different things. The baseline exists only to prove
+additions-only between phases, so it is kept as a bare file list with no header — a header would
+break the next phase's diff. Cleanup block ran straight after the last package and is
 empty (`reports/p7-cleanup.txt`). Typecheck and build clean (`reports/p7-typecheck.txt`).
 
 Phase 7 closed the mid-run approval gap. Before it, `packages/policy/src/gate.ts` wrote a
@@ -48,7 +52,14 @@ Two real bugs surfaced from tests written first:
 - `paused` was missing from `STUCK_STATUSES`, so a worker that died mid-approval left the
   task paused forever with its container and worktree skipped as "live".
 
-**Verified test counts after Phase 6 (Nov 27, 2026), code at `d032de4`:** core 9 in 1 file,
+**Current state (Nov 28, 2026).** `main` is at `8b8e20d` with a clean working tree. Phases 0–4
+are done (4 signed off); 5, 6 and 7 are implemented and green but **all three are still awaiting
+reviewer sign-off** — the implementer does not grade its own work. Phase 8 (GitHub PRs) has not
+been started and nothing for it is scaffolded. Three items are open and none of them block
+Phase 8: the pre-existing `core` lint error above, the missing `packages/github` raw-git guard
+(follow-up below, marked `[~]`), and the `.env.example` secret values (follow-up below).
+
+**Verified test counts after Phase 6 (Nov 27, 2026), code at `5de874b`:** core 9 in 1 file,
 db 8 in 1, agent 34 in 6, policy 129 in 14, sandbox 44 in 10, verifier 88 in 11, worker 74 in 11,
 api 92 in 9 — **478 total**, every package `EXIT=0` (`reports/seq-tests.txt`). Phase 5's 312 are
 reproduced exactly, so Phase 6 added 166 and changed none.
@@ -64,7 +75,9 @@ branches. Typecheck clean (`reports/typecheck.txt`, `TYPECHECK_EXIT=0`). Failing
 
 Known open: `pnpm -r lint` exits 1 on a **pre-existing** `@typescript-eslint/no-explicit-any` at
 `packages/core/src/mask.ts:43` (`reports/lint.txt`). Predates Phase 6 — confirmed by stashing the
-Phase 6 changes and re-running. Not fixed here: `core` is signed off and it is out of phase scope.
+Phase 6 changes and re-running. Re-confirmed unchanged after Phase 7 — still the only lint error,
+`LINT_EXIT=1` (`reports/p7-lint.txt`). Not fixed here: `core` is signed off and it is out of
+phase scope.
 
 **Verified test counts at `6d5843d` (Phase 5 round 4):** policy 129 in 14 files, sandbox 44 in 10,
 agent 34 in 6, core 9, db 8, verifier 88 in 11 — **312 total**, `ALL_TESTS_EXIT=0`, with three
@@ -359,7 +372,10 @@ verifyTask(task, sandbox):
 - [x] Phase 4: real policy replaces `AllowAllGate` in the demo — done, `scripts/agent-demo.ts:183,191`
 - [x] Phase 6: max 2 verify-fix loops enforced in the worker (`maxVerifyFixLoops`, default 2, `packages/worker/test/pipeline-verify-loop.test.ts`); retry increments `attempt` (`POST /tasks/:id/retry`, `packages/api/test/tasks.test.ts`)
 - [~] Add the "no raw git" guard to worker, github and api packages — worker and api done (`packages/worker/test/guard.test.ts`, `packages/api/test/guard.test.ts`); **github still has no guard** (verifier: done)
-- [ ] `.env` untracked, `.env.example` has empty secret values
+- [ ] `.env` untracked, `.env.example` has empty secret values — `.env` is untracked (verified);
+  `.env.example` still has **non-empty** values for `ANTHROPIC_API_KEY`, `GITHUB_TOKEN` and
+  `POSTGRES_PASSWORD`. Checked by pattern only; the values were never printed or read.
+  Owner decision: blank them if they are real, leave them if they are placeholders.
 
 ---
 
