@@ -16,14 +16,37 @@
 | 3     | Agent loop + tools                            | ✅ Done and committed (prices still placeholders)                         |
 | 4     | Permission engine + audit + secret masking    | ✅ **Signed off** at `88b89a1` (rounds 5–8)                               |
 | 5     | Verifier + diff policy                        | ⏳ Rounds 1–4 done (`6d5843d`), all 12 findings closed, awaiting sign-off  |
-| 6     | API + queue + parallel workers                | ⏳ Done at `d032de4`, 478 tests green, awaiting sign-off                  |
-| 7     | CLI + approval flow                           | ⏳                                                                        |
+| 6     | API + queue + parallel workers                | ⏳ Done at `5de874b`, 478 tests green, awaiting sign-off                  |
+| 7     | CLI + approval flow                           | ⏳ Done, 532 tests green, awaiting sign-off                               |
 | 8     | GitHub PRs                                    | ⏳                                                                        |
 | 9     | Hardening + evals                             | ⏳                                                                        |
 | 10    | Dashboard + productization                    | Later                                                                     |
 
 **Verified test counts at `ab89e07`:** policy 129 in 14 files, sandbox 28 in 7, agent 34 in 6,
 core 9, db 8, verifier 37 in 4 — 245 total.
+
+**Verified test counts after Phase 7 (Nov 28, 2026):** core 9 in 1 file, db 8 in 1,
+agent 41 in 7, policy 129 in 14, cli 36 in 6, sandbox 44 in 10, verifier 88 in 11,
+worker 85 in 13, api 92 in 9 — **532 total**, every package `EXIT=0`
+(`reports/p7-seq-tests.txt`). Phase 6's 478 are reproduced exactly, so Phase 7 added 54
+and changed none; the only count to move was `reconcile.test.ts` 11 -> 13, an addition
+(`reports/p7-it-count-diff.txt`). Cleanup block ran straight after the last package and is
+empty (`reports/p7-cleanup.txt`). Typecheck and build clean (`reports/p7-typecheck.txt`).
+
+Phase 7 closed the mid-run approval gap. Before it, `packages/policy/src/gate.ts` wrote a
+pending `tool_call` approval row on an `ask` and `packages/agent/src/loop.ts` hard-denied
+the call with "approval not implemented", so every row leaked as permanently pending.
+Now an `ask` blocks the loop on an injected `ApprovalWaiter`
+(`packages/worker/src/approval-waiter.ts`), which drives running -> paused -> running and
+fails closed on a missing row, a failed pause, an unreadable row or a timeout. The
+`AgentDeps.approvalWaiter` port is optional, so the pre-Phase-7 behaviour and its test
+(`packages/agent/test/agent.test.ts:318`) are untouched.
+
+Two real bugs surfaced from tests written first:
+- A `CancelledError` raised while paused was wrapped into an `InfraError` by
+  `runTaskPipeline`, which would have made BullMQ **retry a cancelled task**.
+- `paused` was missing from `STUCK_STATUSES`, so a worker that died mid-approval left the
+  task paused forever with its container and worktree skipped as "live".
 
 **Verified test counts after Phase 6 (Nov 27, 2026), code at `d032de4`:** core 9 in 1 file,
 db 8 in 1, agent 34 in 6, policy 129 in 14, sandbox 44 in 10, verifier 88 in 11, worker 74 in 11,
@@ -320,7 +343,7 @@ verifyTask(task, sandbox):
       "Wiring Not Done Yet" in `packages/policy/README.md`
 - [ ] Phase 6: strip or `skip-worktree` tracked secret files in worktrees; network allowlist
       (registry only) for the install phase
-- [ ] Phase 7: `ask` creates a `pending` approval row the loop never resolves
+- [x] Phase 7: `ask` creates a `pending` approval row the loop never resolves — closed. The loop now waits on `ApprovalWaiter`; an unanswered row is marked `rejected` on timeout rather than left pending. Tests: `packages/agent/test/approval-waiter.test.ts`, `packages/worker/test/approval-waiter.test.ts`, `packages/worker/test/pipeline-approval.test.ts`
 - [ ] Move file tools into the container (removes the TOCTOU class entirely)
 - [ ] Harder fixtures (multi-file bug, no existing failing test, fix needs a new test) before Phase 9
 - [ ] Real repos: `git ls-files | grep -iE '(^|/)\.env|\.pem$|\.key$|\.npmrc'` before first use

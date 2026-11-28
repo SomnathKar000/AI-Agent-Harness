@@ -1,4 +1,5 @@
 packages/agent/test/agent.test.ts:14
+packages/agent/test/approval-waiter.test.ts:7
 packages/agent/test/client.test.ts:6
 packages/agent/test/cost.test.ts:4
 packages/agent/test/guard.test.ts:1
@@ -13,6 +14,12 @@ packages/api/test/queue-name.test.ts:1
 packages/api/test/repos.test.ts:2
 packages/api/test/secret-hygiene.test.ts:5
 packages/api/test/tasks.test.ts:13
+packages/cli/test/client.test.ts:7
+packages/cli/test/commands.test.ts:11
+packages/cli/test/config.test.ts:6
+packages/cli/test/guard.test.ts:5
+packages/cli/test/main.test.ts:4
+packages/cli/test/secret-hygiene.test.ts:3
 packages/core/test/transitions.test.ts:9
 packages/db/test/repository.test.ts:8
 packages/policy/test/deny-patterns-depth.test.ts:2
@@ -50,8 +57,10 @@ packages/verifier/test/r3-verifier-failclosed.test.ts:10
 packages/verifier/test/r3-worktree-size.test.ts:3
 packages/verifier/test/verifier.test.ts:18
 packages/verifier/test/worktree-size.test.ts:3
+packages/worker/test/approval-waiter.test.ts:6
 packages/worker/test/guard.test.ts:6
 packages/worker/test/parallel.integration.test.ts:2
+packages/worker/test/pipeline-approval.test.ts:3
 packages/worker/test/pipeline-cancel.test.ts:4
 packages/worker/test/pipeline-cleanup.test.ts:6
 packages/worker/test/pipeline-commit.test.ts:7
@@ -59,5 +68,5 @@ packages/worker/test/pipeline-retry.test.ts:9
 packages/worker/test/pipeline-state.test.ts:7
 packages/worker/test/pipeline-verify-loop.test.ts:5
 packages/worker/test/queue.test.ts:3
-packages/worker/test/reconcile.test.ts:11
+packages/worker/test/reconcile.test.ts:13
 packages/worker/test/secret-wiring.test.ts:5

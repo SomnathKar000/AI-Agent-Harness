@@ -6,6 +6,7 @@ import type {
   ToolUseBlock,
   ToolResultBlock,
   LogStepParams,
+  ApprovalOutcome,
 } from './types.js';
 import { BUGFIX_SYSTEM_PROMPT } from './prompts/bugfix.js';
 import { AGENT_TOOLS, executeTool, truncateToolOutput } from './tools/index.js';
@@ -273,14 +274,43 @@ export async function runAgent(
       }
 
       if (decision.action === 'ask') {
-        // Treat ask as deny with reason "approval not implemented"
-        const content = 'denied: approval not implemented';
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          is_error: true,
-          content,
-        });
+        const mask = (text: string): string =>
+          deps.gate.maskSecrets ? deps.gate.maskSecrets(text) : text;
+
+        let content: string;
+        let approved = false;
+
+        if (!deps.approvalWaiter) {
+          // No waiter injected: the pre-Phase-7 behaviour.
+          content = 'denied: approval not implemented';
+        } else {
+          let outcome: ApprovalOutcome | undefined;
+          try {
+            outcome = await deps.approvalWaiter.waitForApproval({
+              taskId: task.id,
+              toolCall,
+              reason: decision.reason,
+            });
+          } catch (err) {
+            // A cancel must abort the run, not turn into a denied tool call. Matched by
+            // name so this package keeps no dependency on the worker (hard rule 1).
+            if (err instanceof Error && err.name === 'CancelledError') throw err;
+            outcome = {
+              status: 'rejected',
+              reason: `approval failed: ${err instanceof Error ? err.message : String(err)}`,
+            };
+          }
+
+          if (outcome?.status === 'approved') {
+            approved = true;
+            content = 'approved by human';
+          } else if (outcome?.status === 'rejected') {
+            content = `denied: ${mask(outcome.reason || 'rejected by human')}`;
+          } else {
+            // Anything we do not recognise is a denial (hard rule 13).
+            content = 'denied: approval returned an unrecognised outcome';
+          }
+        }
 
         await logStep({
           taskId: task.id,
@@ -294,7 +324,17 @@ export async function runAgent(
           completionTokens: 0,
           costUsd: 0,
         });
-        continue;
+
+        if (!approved) {
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            is_error: true,
+            content,
+          });
+          continue;
+        }
+        // Approved: fall through to the normal execution path below.
       }
 
       // Allowed - execute tool

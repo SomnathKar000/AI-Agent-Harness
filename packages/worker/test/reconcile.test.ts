@@ -77,6 +77,38 @@ describe('Startup reconciliation', () => {
     expect(task?.status).toBe('failed');
   });
 
+  it('marks a task paused on a mid-run approval as failed (Phase 7)', async () => {
+    // Nothing is waiting on the approval once the worker is gone, so approving it later
+    // would do nothing. Leaving the task paused would strand it forever.
+    const { taskId } = await seedQueuedTask(db);
+    await transitionTask(db, taskId, 'queued', 'running', 'system');
+    await transitionTask(db, taskId, 'running', 'paused', 'agent');
+
+    const { ports } = makePorts(db, [], []);
+    const report = await reconcileOrphans(ports);
+
+    const task = await getTask(db, taskId);
+    expect(task?.status).toBe('failed');
+    expect(task?.failureReason).toContain('worker_restart');
+    expect(report.failedTaskIds).toContain(taskId);
+  });
+
+  it('cleans up the container and worktree of a paused task too', async () => {
+    const { taskId } = await seedQueuedTask(db);
+    await transitionTask(db, taskId, 'queued', 'running', 'system');
+    await setTaskFields(db, taskId, {
+      containerId: 'container-paused',
+      worktreePath: '/tmp/wt-paused',
+      branchName: 'harness/paused',
+    });
+    await transitionTask(db, taskId, 'running', 'paused', 'agent');
+
+    const { ports, destroyed } = makePorts(db, [], []);
+    await reconcileOrphans(ports);
+
+    expect(destroyed.some((d) => d.containerId === 'container-paused')).toBe(true);
+  });
+
   it('leaves queued and awaiting_approval tasks alone', async () => {
     const queued = await seedQueuedTask(db);
     const awaiting = await seedQueuedTask(db);

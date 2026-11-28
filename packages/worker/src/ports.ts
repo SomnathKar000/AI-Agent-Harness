@@ -22,6 +22,8 @@ import {
   type PolicyGate as AgentPolicyGate,
 } from '@harness/agent';
 import { PolicyGate } from '@harness/policy';
+import type { ApprovalWaiter } from '@harness/agent';
+import { createDbApprovalWaiter } from './approval-waiter.js';
 import { verifyTask as realVerifyTask, type VerifyResult } from '@harness/verifier';
 import type { Database } from '@harness/db';
 
@@ -119,6 +121,16 @@ export const defaultSandbox: SandboxPort = {
     return String(diff.stdout ?? '').trim().length > 0;
   },
 };
+
+/** Builds the per-task waiter the agent loop uses when policy returns `ask`. */
+export type ApprovalWaiterFactory = (args: {
+  db: Database;
+  taskId: string;
+  pollMs?: number;
+}) => ApprovalWaiter;
+
+export const defaultCreateApprovalWaiter: ApprovalWaiterFactory = (args) =>
+  createDbApprovalWaiter({ db: args.db, taskId: args.taskId, pollMs: args.pollMs });
 
 export interface AgentPort {
   runAgent(task: AgentTask, deps: AgentDeps): Promise<AgentResult>;

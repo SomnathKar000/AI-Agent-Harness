@@ -18,8 +18,20 @@ import {
   type Workspace,
 } from '@harness/sandbox';
 
-/** Statuses a task cannot still be in once no worker is running it. */
-export const STUCK_STATUSES: readonly TaskStatus[] = ['running', 'verifying', 'pushing'];
+/**
+ * Statuses a task cannot still be in once no worker is running it.
+ *
+ * `paused` is here from Phase 7 on. A paused task is one whose agent loop is blocked
+ * waiting for a human to decide a tool approval; that wait lives in the worker process.
+ * Once the process is gone nothing is listening, so a later approval would resolve
+ * nothing and the task would sit paused forever.
+ */
+export const STUCK_STATUSES: readonly TaskStatus[] = [
+  'running',
+  'paused',
+  'verifying',
+  'pushing',
+];
 
 /** Statuses whose worktree is still legitimately in use or not yet created. */
 const LIVE_STATUSES: readonly TaskStatus[] = [

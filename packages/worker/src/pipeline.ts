@@ -20,6 +20,8 @@ import {
   type AgentPort,
   type VerifierPort,
   type GateFactory,
+  type ApprovalWaiterFactory,
+  defaultCreateApprovalWaiter,
 } from './ports.js';
 
 export interface PipelineDeps {
@@ -33,6 +35,10 @@ export interface PipelineDeps {
   maxVerifyFixLoops?: number;
   /** How often the cancel watcher re-reads the task status from Postgres. Default 2000ms. */
   cancelPollMs?: number;
+  /** Builds the waiter used when policy returns `ask`. Defaults to the Postgres one. */
+  createApprovalWaiter?: ApprovalWaiterFactory;
+  /** How often that waiter re-reads the approval row. Default 2000ms. */
+  approvalPollMs?: number;
   containerLimits?: ContainerLimits;
   model?: string;
   pricingTable?: Record<string, ModelPricing>;
@@ -312,6 +318,12 @@ export async function runTaskPipeline(
 
     // 9. Agent, then verification, with at most `maxVerifyFixLoops` fix rounds.
     let description = task.description;
+    const approvalWaiter = (deps.createApprovalWaiter ?? defaultCreateApprovalWaiter)({
+      db,
+      taskId,
+      pollMs: deps.approvalPollMs,
+    });
+
     let fixLoops = 0;
 
     for (;;) {
@@ -335,9 +347,17 @@ export async function runTaskPipeline(
             logger,
             model: deps.model,
             pricingTable: deps.pricingTable,
+            approvalWaiter,
           }
         );
       } catch (err) {
+        // A cancel reaches here when the task is cancelled while the loop is paused
+        // waiting for a human approval. It is a verdict, not an infrastructure fault:
+        // wrapping it in an InfraError would make BullMQ retry a cancelled task.
+        if (err instanceof CancelledError) {
+          cancelled = true;
+          throw err;
+        }
         // The loop itself failing is an LLM or transport problem, not an agent verdict.
         throw asInfraError('runAgent failed', err);
       }

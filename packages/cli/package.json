@@ -9,5 +9,11 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "lint": "eslint ."
+  },
+  "dependencies": {
+    "commander": "^15.1.0"
+  },
+  "bin": {
+    "harness": "./dist/cli.js"
   }
 }

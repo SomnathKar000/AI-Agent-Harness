@@ -139,6 +139,40 @@ export type AgentResult =
   | { status: 'needs_info'; question: string }
   | { status: 'failed'; reason: string };
 
+/**
+ * A mid-run tool approval. The gate returned `ask`; a human has to decide before the
+ * tool may run. Phase 7.
+ */
+export interface ApprovalRequest {
+  taskId: string;
+  toolCall: ToolCall;
+  /** The policy's reason for asking, already masked by the gate. */
+  reason?: string;
+}
+
+/**
+ * The result of waiting for a human. There is no third state on purpose: a timeout, a
+ * lost connection or an unreadable row is a `rejected`, never a silent allow
+ * (hard rule 13).
+ */
+export type ApprovalOutcome =
+  | { status: 'approved'; note?: string }
+  | { status: 'rejected'; reason: string };
+
+/**
+ * Injected by the worker. The agent package never reads the database itself, so this
+ * stays a port (hard rule 1).
+ *
+ * Implementations must fail closed. The loop additionally treats a throw as a rejection,
+ * with one exception: an error whose `name` is `CancelledError` is rethrown, so a task
+ * cancelled while paused aborts the run instead of resuming with a denial. The name is
+ * matched as a string rather than by importing the class, to keep the dependency
+ * direction intact.
+ */
+export interface ApprovalWaiter {
+  waitForApproval(request: ApprovalRequest): Promise<ApprovalOutcome>;
+}
+
 export interface AgentDeps {
   llm: LLMClient;
   gate: PolicyGate;
@@ -148,4 +182,9 @@ export interface AgentDeps {
   model?: string;
   maxHistoryTokens?: number;
   systemPrompt?: string;
+  /**
+   * Optional. When absent the loop keeps the pre-Phase-7 behaviour and denies every
+   * `ask` with "approval not implemented".
+   */
+  approvalWaiter?: ApprovalWaiter;
 }
